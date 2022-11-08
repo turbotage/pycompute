@@ -5,26 +5,15 @@ from enum import Enum
 #from numba import jit
 
 from cuda_program import CudaFunction, CudaTensor
+from cuda_program import CudaTensorChecking as ctc
 
 class Linkage(Enum):
 	GLOBAL = 1
 	LOCAL = 2
 
 
-def dim_type_funcid(ndim: int, dtype: cp.dtype):
-	type_qualifier: str
-	if dtype == cp.float32:
-		type_qualifier = 'f'
-	elif dtype == cp.float64:
-		type_qualifier = 'd'
-	else:
-		raise RuntimeError('Does only support fp32 and fp64')
-
-	return '_' + ndim + '_' + type_qualifier
-
-
 def ldl_funcid(ndim: int, dtype: cp.dtype):
-	return 'ldl' + dim_type_funcid(ndim, dtype)
+	return 'ldl' + ctc.dim_type_funcid(ndim, dtype)
 
 def ldl_code(ndim: int, dtype: cp.dtype, linkage: Linkage):
 	codestr = Template("""
@@ -48,13 +37,7 @@ def ldl_code(ndim: int, dtype: cp.dtype, linkage: Linkage):
 	}
 	""")
 
-	type: str
-	if dtype == cp.float32:
-		type = 'float'
-	elif dtype == cp.float64:
-		type = 'double'
-	else:
-		raise RuntimeError('LDL does only support fp32 and fp64')
+	type = TensorChecking.fp32_or_fp64(dtype, 'LDL')
 
 	funcid = ldl_funcid(ndim, dtype)
 
@@ -62,18 +45,22 @@ def ldl_code(ndim: int, dtype: cp.dtype, linkage: Linkage):
 
 class LDL(CudaFunction):
 	def __init__(self, mat: CudaTensor):
-		if len(mat.shape) != 3:
-			raise RuntimeError('Shapes array must be 3 long')
-		if mat.shape[1] == mat.shape[2]:
-			raise RuntimeError('Matrix must be square')
+		ctc.check_square_mat(mat, 'LDL')
+		self.mat = mat
 
-		
+	def get_funcid(self):
+		return ldl_funcid(self.mat.shape[1], self.mat.dtype)
 
+	def get_code(self):
+		return ldl_code(self.mat.shape[1], self.mat.dtype)
+
+	def get_deps(self):
+		return dict()
 
 
 
 def gmw81_funcid(ndim: int, dtype: cp.dtype):
-	return 'gmw81' + dim_type_funcid(ndim, dtype)
+	return 'gmw81' + ctc.dim_type_funcid(ndim, dtype)
 
 def gmw81_code(ndim: int, dtype: cp.dtype, linkage: Linkage):
 	codestr = Template("""
@@ -151,33 +138,42 @@ def gmw81_code(ndim: int, dtype: cp.dtype, linkage: Linkage):
 	}
 	""")
 
-	type: str
+	type: str = ctc.fp32_or_fp64(dtype, 'gmw81')
 	abs_func: str
 	sqrt_func: str
 	machine_eps: str
 	if dtype == cp.float32:
-		type = 'float'
 		abs_func = 'fabsf'
 		sqrt_func = 'sqrtf'
 		machine_eps = '1e-6'
-	elif dtype == cp.float64:
-		type = 'double'
+	else:
 		abs_func = 'fabs'
 		sqrt_func = 'sqrt'
 		machine_eps = '1e-15'
-	else:
-		raise RuntimeError('gmw81 does only support fp32 and fp64')
 
 	funcid = gmw81_funcid(ndim, dtype)
 
 	return codestr.render(funcid=funcid, fp_type=type, ndim=ndim, 
 		abs_func=abs_func, sqrt_func=sqrt_func, machine_eps=machine_eps)
 
+class GMW81(CudaFunction):
+	def __init__(self, mat: CudaTensor):
+		ctc.check_square_mat(mat, 'gmw81')
+		self.mat = mat
+
+	def get_funcid(self):
+		return gmw81_funcid(self.mat.shape[1], self.mat.dtype)
+
+	def get_code(self):
+		return gmw81_code(self.mat.shape[1], self.mat.dtype)
+
+	def get_deps(self):
+		return dict()
 
 
 
 def forward_subs_unit_diaged_funcid(ndim: int, dtype: cp.dtype):
-	return 'forward_subs_unit_diaged' + dim_type_funcid(ndim, dtype)
+	return 'forward_subs_unit_diaged' + ctc.dim_type_funcid(ndim, dtype)
 
 def forward_subs_unit_diaged_code(ndim: int, dtype: cp.dtype):
 	codestr = Template("""
@@ -192,18 +188,32 @@ def forward_subs_unit_diaged_code(ndim: int, dtype: cp.dtype):
 	}
 	""")
 
-	type: str
-	if dtype == cp.float32:
-		type = 'float'
-	elif dtype == cp.float64:
-		type = 'double'
-	else:
-		raise RuntimeError('LDL does only support fp32 and fp64')
+	type: str = ctc.fp32_or_fp64(dtype, 'forward_subs_unit_diaged')
 
 	funcid = forward_subs_unit_diaged_funcid(ndim, dtype)
 
 	return codestr.render(funcid=funcid, fp_type=type, ndim=ndim)
 
+class ForwardSubsUnitDiaged(CudaFunction):
+	def __init__(self, mat: CudaTensor, rhs: CudaTensor, sol: CudaTensor):
+		func_name = 'forward_subs_unit_diaged'
+		ctc.check_square_mat(mat, func_name)
+		ctc.check_is_vec(rhs, func_name)
+		ctc.check_is_vec(sol, func_name)
+		ctc.check_matvec_multipliable(mat, sol, func_name)
+
+		self.mat = mat
+		self.rhs = rhs+
+		self.sol = sol
+
+	def get_funcid(self):
+		return gmw81_funcid(self.mat.shape[1], self.mat.dtype)
+
+	def get_code(self):
+		return gmw81_code(self.mat.shape[1], self.mat.dtype)
+
+	def get_deps(self):
+		return dict()
 
 
 def backward_subs_unit_t_funcid(ndim: int, dtype: cp.dtype):
