@@ -1,21 +1,20 @@
 
 from jinja2 import Template
 import cupy as cp
-from enum import Enum
 #from numba import jit
 
-from cuda_program import CudaFunction, CudaTensor
-from cuda_program import CudaTensorChecking as ctc
+from .cuda_program import CudaFunction, CudaTensor
+from .cuda_program import CudaTensorChecking as ctc
 
-class Linkage(Enum):
-	GLOBAL = 1
-	LOCAL = 2
+from . import permute
 
 
+# DECOMPOSITIONS #
+# A = L @ D @ L^T
 def ldl_funcid(ndim: int, dtype: cp.dtype):
 	return 'ldl' + ctc.dim_type_funcid(ndim, dtype)
 
-def ldl_code(ndim: int, dtype: cp.dtype, linkage: Linkage):
+def ldl_code(ndim: int, dtype: cp.dtype):
 	codestr = Template("""
 	void {{funcid}}({{fp_type}}* mat) {
 		{{fp_type}} arr[{{ndim}}];
@@ -37,7 +36,7 @@ def ldl_code(ndim: int, dtype: cp.dtype, linkage: Linkage):
 	}
 	""")
 
-	type = TensorChecking.fp32_or_fp64(dtype, 'LDL')
+	type = ctc.check_fp32_or_fp64(CudaTensor(None, dtype), 'LDL')
 
 	funcid = ldl_funcid(ndim, dtype)
 
@@ -55,14 +54,14 @@ class LDL(CudaFunction):
 		return ldl_code(self.mat.shape[1], self.mat.dtype)
 
 	def get_deps(self):
-		return dict()
+		return list()
 
 
-
+# P @ (A + E) @ P^T = L @ D @ L^T
 def gmw81_funcid(ndim: int, dtype: cp.dtype):
 	return 'gmw81' + ctc.dim_type_funcid(ndim, dtype)
 
-def gmw81_code(ndim: int, dtype: cp.dtype, linkage: Linkage):
+def gmw81_code(ndim: int, dtype: cp.dtype):
 	codestr = Template("""
 	void {{funcid}}({{fp_type}}* mat) {
 		{{fp_type}} m1 = 0.0f;
@@ -138,7 +137,7 @@ def gmw81_code(ndim: int, dtype: cp.dtype, linkage: Linkage):
 	}
 	""")
 
-	type: str = ctc.fp32_or_fp64(dtype, 'gmw81')
+	type: str = ctc.check_fp32_or_fp64(CudaTensor(None, dtype), 'gmw81')
 	abs_func: str
 	sqrt_func: str
 	machine_eps: str
@@ -150,6 +149,7 @@ def gmw81_code(ndim: int, dtype: cp.dtype, linkage: Linkage):
 		abs_func = 'fabs'
 		sqrt_func = 'sqrt'
 		machine_eps = '1e-15'
+
 
 	funcid = gmw81_funcid(ndim, dtype)
 
@@ -168,9 +168,65 @@ class GMW81(CudaFunction):
 		return gmw81_code(self.mat.shape[1], self.mat.dtype)
 
 	def get_deps(self):
-		return dict()
+		return list()
+
+# P @ A = L @ U
+def lu_funcid(ndim: int, dtype: cp.dtype):
+	return 'lu' + ctc.dim_type_funcid(ndim, dtype)
+
+def lu_code(ndim: int, dtype: cp.dtype):
+	codestr = Template("""
+	void {{funcid}}({{fp_type}}* mat, int* pivot) {
+		{{fp_type}} val;
+		for (int k = 0; k < {{ndim}} - 1; ++k) {
+			int max_row_idx;
+			{{fp_type}} max_row_value;
+			{{max_mag_subrow_funcid}}(mat, k, k, max_row_idx, max_row_value);
+			{{row_interchange_i_funcid}}(mat, k, max_row_idx);
+			pivot[k] = max_row_idx;
+
+			val = mat[k*{{ndim}} + k];
+			if (val > {{machine_eps}}) {
+				for (int i = k + 1; i < {{ndim}}; ++i) {
+					mat[i*{{ndim}} + k] /= val;
+				}
+
+				for (int i = k + 1; i < {{ndim}}; ++i) {
+					for (int j = k + 1; j < {{ndim}}; ++j) {
+						mat[i*{{ndim}} + j] -= mat[i*{{ndim}} + k] * mat[k*{{ndim}} + j];
+					}
+				}
+			}
+
+		}
+	}
+	""")
+
+	type = ctc.check_fp32_or_fp64(CudaTensor(None, dtype), 'ldl_solve')
+
+	funcid = lu_funcid(ndim, dtype)
+	max_mag_sub_fid = permute.max_mag_subrow_funcid(ndim, ndim, dtype)
+	row_inter_i_fid = permute.row_interchange_i_funcid(ndim, dtype)
+
+	return codestr.render(funcid=funcid, fp_type=type, ndim=ndim, 
+		max_mag_subrow_funcid=max_mag_sub_fid, row_interchange_i_funcid=row_inter_i_fid)
+
+class LU(CudaFunction):
+	def __init__(self, mat: CudaTensor):
+		ctc.check_square_mat(mat, 'lu')
+		self.mat = mat
+
+	def get_funcid(self):
+		return lu_funcid(self.mat.shape[1], self.mat.dtype)
+
+	def get_code(self):
+		return lu_code(self.mat.shape[1], self.mat.dtype)
+
+	def get_deps(self):
+		return list()
 
 
+# FORWARD AND BACKWARD SUBSTITUTIONS #
 
 def forward_subs_unit_diaged_funcid(ndim: int, dtype: cp.dtype):
 	return 'forward_subs_unit_diaged' + ctc.dim_type_funcid(ndim, dtype)
@@ -188,7 +244,7 @@ def forward_subs_unit_diaged_code(ndim: int, dtype: cp.dtype):
 	}
 	""")
 
-	type: str = ctc.fp32_or_fp64(dtype, 'forward_subs_unit_diaged')
+	type: str = ctc.check_fp32_or_fp64(CudaTensor(None, dtype), 'forward_subs_unit_diaged')
 
 	funcid = forward_subs_unit_diaged_funcid(ndim, dtype)
 
@@ -203,21 +259,29 @@ class ForwardSubsUnitDiaged(CudaFunction):
 		ctc.check_matvec_multipliable(mat, sol, func_name)
 
 		self.mat = mat
-		self.rhs = rhs+
+		self.rhs = rhs
 		self.sol = sol
 
+	def __init__(self, mat: CudaTensor):
+		func_name = 'forward_subs_unit_diaged'
+		ctc.check_square_mat(mat, func_name)
+
+		self.mat = mat
+		self.rhs = None
+		self.sol = None
+
 	def get_funcid(self):
-		return gmw81_funcid(self.mat.shape[1], self.mat.dtype)
+		return forward_subs_unit_diaged_funcid(self.mat.shape[1], self.mat.dtype)
 
 	def get_code(self):
-		return gmw81_code(self.mat.shape[1], self.mat.dtype)
+		return forward_subs_unit_diaged_code(self.mat.shape[1], self.mat.dtype)
 
 	def get_deps(self):
-		return dict()
+		return list()
 
 
 def backward_subs_unit_t_funcid(ndim: int, dtype: cp.dtype):
-	return 'backward_subs_unit_t' + dim_type_funcid(ndim, dtype)
+	return 'backward_subs_unit_t' + ctc.dim_type_funcid(ndim, dtype)
 
 def backward_subs_unit_t_code(ndim: int, dtype: cp.dtype):
 	codestr = Template("""
@@ -231,14 +295,189 @@ def backward_subs_unit_t_code(ndim: int, dtype: cp.dtype):
 	}
 	""")
 
-	type: str
-	if dtype == cp.float32:
-		type = 'float'
-	elif dtype == cp.float64:
-		type = 'double'
-	else:
-		raise RuntimeError('LDL does only support fp32 and fp64')
+	type: str = ctc.check_fp32_or_fp64(CudaTensor(None, dtype), 'backward_subs_unit_t')
 
 	funcid = backward_subs_unit_t_funcid(ndim, dtype)
 
 	return codestr.render(funcid=funcid, fp_type=type, ndim=ndim)
+
+class BackwardSubsUnitT(CudaFunction):
+	def __init__(self, mat: CudaTensor, rhs: CudaTensor, sol: CudaTensor):
+		func_name = 'backward_subs_unit_t'
+		ctc.check_square_mat(mat, func_name)
+		ctc.check_is_vec(rhs, func_name)
+		ctc.check_is_vec(sol, func_name)
+		ctc.check_matvec_multipliable(mat, sol, func_name)
+
+		self.mat = mat
+		self.rhs = rhs
+		self.sol = sol
+
+	def __init__(self, mat: CudaTensor):
+		func_name = 'backward_subs_unit_t'
+		ctc.check_square_mat(mat, func_name)
+
+		self.mat = mat
+		self.rhs = None
+		self.sol = None
+
+	def get_funcid(self):
+		return backward_subs_unit_t_funcid(self.mat.shape[1], self.mat.dtype)
+
+	def get_code(self):
+		return backward_subs_unit_t_code(self.mat.shape[1], self.mat.dtype)
+
+	def get_deps(self):
+		return list()
+
+
+# SOLVERS
+# solves (L @ D @ L^T) @ x = y
+def ldl_solve_funcid(ndim: int, dtype: cp.dtype):
+	return 'ldl_solve' + ctc.dim_type_funcid(ndim, dtype)
+
+def ldl_solve_code(ndim: int, dtype: cp.dtype):
+	codestr = Template("""
+	void {{funcid}}({{fp_type}}* mat, {{fp_type}}* rhs, {{fp_type}}* sol) {
+		{{fp_type}} arr[{{ndim}}];
+		{{forward_funcid}}(mat, rhs, arr);
+		{{backward_funcid}}(mat, arr, sol);
+	}
+	""")
+
+	type = ctc.check_fp32_or_fp64(CudaTensor(None, dtype), 'ldl_solve')
+
+	funcid = ldl_solve_funcid(ndim, dtype)
+	forward_fid = forward_subs_unit_diaged_funcid(ndim, dtype)
+	backward_fid = backward_subs_unit_t_funcid(ndim, dtype)
+
+	return codestr.render(funcid=funcid, fp_type=type, ndim=ndim, 
+		forward_funcid=forward_fid, backward_funcid=backward_fid)
+
+class LDLSolve(CudaFunction):
+	def __init__(self, mat: CudaTensor, rhs: CudaTensor, sol: CudaTensor):
+		func_name = 'ldl_solve'
+		ctc.check_square_mat(mat, func_name)
+		ctc.check_is_vec(rhs, func_name)
+		ctc.check_is_vec(sol, func_name)
+		ctc.check_matvec_multipliable(mat, sol, func_name)
+
+		self.mat = mat
+		self.rhs = rhs
+		self.sol = sol
+
+	def __init__(self, mat: CudaTensor):
+		func_name = 'ldl_solve'
+		ctc.check_square_mat(mat, func_name)
+
+		self.mat = mat
+		self.rhs = None
+		self.sol = None
+
+	def get_funcid(self):
+		return ldl_solve_funcid(self.mat.shape[1], self.mat.dtype)
+
+	def get_code(self):
+		return ldl_solve_code(self.mat.shape[1], self.mat.dtype)
+
+	def get_deps(self):
+		return [ForwardSubsUnitDiaged(self.mat), BackwardSubsUnitT(self.mat)]
+
+
+# FULL SOLVING PROCEDURES
+
+# LDL solving
+def ldl_solver_funcid(ndim: int, dtype: cp.dtype):
+	return 'ldl_solver' + ctc.dim_type_funcid(ndim, dtype)
+
+def ldl_solver_code(ndim: int, dtype: cp.dtype):
+	codestr = Template("""
+	void {{funcid}}({{fp_type}}* mat, {{fp_type}}* rhs, {{fp_type}}* sol) {
+		{{ldl_funcid}}(mat);
+		{{ldl_solve_funcid}}(mat, rhs, sol);
+	}
+	""")
+
+	type: str = ctc.check_fp32_or_fp64(CudaTensor(None, dtype), 'gmw81_solver')
+
+	funcid = gmw81_solver_funcid(ndim, dtype)
+	ldl_fid = ldl_funcid(ndim, dtype)
+	ldlsol_fid = ldl_solve_funcid(ndim, dtype)
+	
+	return codestr.render(funcid=funcid, fp_type=type, ndim=ndim,
+		ldl_funcid=ldl_fid, ldl_solve_funcid=ldlsol_fid)
+
+class LDLSolver(CudaFunction):
+	def __init__(self, mat: CudaTensor, rhs: CudaTensor, sol: CudaTensor):
+		func_name = 'ldl_solver'
+		ctc.check_square_mat(mat, func_name)
+		ctc.check_is_vec(rhs, func_name)
+		ctc.check_is_vec(sol, func_name)
+		ctc.check_matvec_multipliable(mat, sol, func_name)
+
+		self.mat = mat
+		self.rhs = rhs
+		self.sol = sol
+
+	def get_funcid(self):
+		return ldl_solver_funcid(self.mat.ndim[1], self.mat.dtype)
+
+	def get_code(self):
+		return ldl_solver_code(self.mat.ndim[1], self.mat.dtype)
+
+	def get_deps(self):
+		return list()
+
+
+# GMW81 solving
+def gmw81_solver_funcid(ndim: int, dtype: cp.dtype):
+	return 'gmw81_solver' + ctc.dim_type_funcid(ndim, dtype)
+
+def gmw81_solver_code(ndim: int, dtype: cp.dtype):
+	codestr = Template("""
+	void {{funcid}}({{fp_type}}* mat, {{fp_type}}* rhs, {{fp_type}}* sol) {
+		int perm[{{ndim}}];
+		{{fp_type}} arr1[{{ndim}}];
+		{{fp_type}} arr2[{{ndim}}];
+		{{diag_pivot_funcid}}(mat, perm);
+		{{gmw81_funcid}}(mat);
+		{{permute_vec_funcid}}(rhs, perm, arr1);
+		{{ldl_solve_funcid}}(mat, arr1, arr2);
+		{{inv_permute_vec_funcid}}(arr2, perm, sol);
+	}
+	""")
+
+	type: str = ctc.check_fp32_or_fp64(CudaTensor(None, dtype), 'gmw81_solver')
+
+	funcid = gmw81_solver_funcid(ndim, dtype)
+	diag_pivot_fid = permute.diag_pivot_funcid(ndim, dtype)
+	gmw81_fid = gmw81_funcid(ndim, dtype)
+	permv_fid = permute.permute_vec_funcid(ndim, dtype)
+	ldlsol_fid = ldl_solve_funcid(ndim, dtype)
+	ipermv_fid = permute.inv_permute_vec_funcid(ndim, dtype)
+	
+
+	return codestr.render(funcid=funcid, fp_type=type, ndim=ndim, diag_pivot_funcid=diag_pivot_fid,
+		gmw81_funcid=gmw81_fid, permute_vec_funcid=permv_fid, ldl_solve_funcid=ldlsol_fid, inv_permute_vec_funcid=ipermv_fid)
+
+class GMW81Solver(CudaFunction):
+	def __init__(self, mat: CudaTensor, rhs: CudaTensor, sol: CudaTensor):
+		func_name = 'gmw81_solver'
+		ctc.check_square_mat(mat, func_name)
+		ctc.check_is_vec(rhs, func_name)
+		ctc.check_is_vec(sol, func_name)
+		ctc.check_matvec_multipliable(mat, sol, func_name)
+
+		self.mat = mat
+		self.rhs = rhs
+		self.sol = sol
+
+	def get_funcid(self):
+		return gmw81_solver_funcid(self.mat.shape[1], self.mat.dtype)
+
+	def get_code(self):
+		return gmw81_solver_code(self.mat.shape[1], self.mat.dtype)
+
+	def get_deps(self):
+		return [permute.DiagPivot(self.mat), GMW81(self.mat), permute.PermuteVec(self.rhs), 
+			LDLSolve(self.mat), permute.InvPermuteVec(self.rhs)]

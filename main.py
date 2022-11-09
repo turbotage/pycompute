@@ -1,34 +1,17 @@
 import numpy as np
 import cupy as cp
 
-ldl_function = """
-{{linkage_qualifier}}
-void ldl({{fp_type}}* mat) {
-    {{fp_type}} arr[{{ndim}}];
-    for (int i = 0; i < ndim; ++i) {
-        {{fp_type}} d = mat[i*{{ndim}} + i];
+import cuda.cuda_program as cuda_cp
+from cuda.cuda_program import CudaTensor, CudaFunction
+from cuda.linalg import GMW81Solver
 
-        for (int j = i + 1; j < {{ndim}}; ++j) {
-            arr[j] = mat[j*{{ndim}} + i];
-            mat[j*{{ndim}} + i] /= d;
-        }
+mat = CudaTensor([100, 4, 4], cp.float32)
+rhs = CudaTensor([100, 4, 1], cp.float32)
+sol = CudaTensor([100, 4, 1], cp.float32)
 
-        for (int j = i + 1; j < {{ndim}}; ++j) {
-            {{fp_type}} aj = arr[j];
-            for (int k = j; k < ndim; ++k) {
-                mat[k*{{ndim}} + j] -= aj * mat[k*{{ndim}} + i];
-            }
-        }
-    }
-}
-"""
+gmw81solver = GMW81Solver(mat, rhs, sol)
 
+code = cuda_cp.code_gen_walking(gmw81solver, "")
 
+print(code)
 
-x1 = cp.arange(25, dtype=cp.float32).reshape(5, 5)
-x2 = cp.arange(25, dtype=cp.float32).reshape(5, 5)
-y = cp.zeros((5,5), dtype=cp.float32)
-
-add_kernel((5,), (5,), (x1, x2, y))
-
-print(y)

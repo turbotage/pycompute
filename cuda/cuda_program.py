@@ -1,44 +1,74 @@
 import cupy as cp
+from enum import Enum
+
+
+class CudaLinkage(Enum):
+	GLOBAL = 1
+	LOCAL = 2
 
 class CudaTensor:
-    def __init__(self, shape: list[int], dtype: cp.dtype):
-        self.shape = shape
-        self.dtype = dtype
+	def __init__(self, shape: list[int], dtype: cp.dtype):
+		self.shape = shape
+		self.dtype = dtype
 
 class CudaFunction:
-    def __init__(self):
-        self.deps: dict[str, CudaFunction] = []
+	def __init__(self):
+		self.deps: dict[str, CudaFunction] = []
 
-    def gen_code(self):
-        raise NotImplementedError()
+	def get_funcid(self):
+		raise NotImplementedError()
 
-    def get_deps(self):
-        return self.deps
+	def get_code(self):
+		raise NotImplementedError()
 
+	def get_deps(self):
+		return self.deps
 
 class CudaTensorChecking:
 
 	@staticmethod
-	def dim_type_funcid(ndim: int, dtype: cp.dtype, func_name: str):
+	def dim_type_funcid(ndim: int, dtype: cp.dtype, func_name: str = None):
 		type_qualifier: str
 		if dtype == cp.float32:
 			type_qualifier = 'f'
 		elif dtype == cp.float64:
 			type_qualifier = 'd'
 		else:
-			raise RuntimeError('does only support fp32 and fp64 in ' + func_name)
+			raise RuntimeError('does only support fp32 and fp64 in ' + func_name if func_name != None else '')
 
-		return '_' + ndim + '_' + type_qualifier
+		return '_' + str(ndim) + '_' + type_qualifier
 
 	@staticmethod
-	def fp32_or_fp64(dtype: cp.dtype, func_name: str):
-		type: str
+	def dim_dim_type_funcid(ndim1: int, ndim2: int, dtype: cp.dtype, func_name: str = None):
+		type_qualifier: str
 		if dtype == cp.float32:
-			type = 'float'
+			type_qualifier = 'f'
 		elif dtype == cp.float64:
+			type_qualifier = 'd'
+		else:
+			raise RuntimeError('does only support fp32 and fp64 in ' + func_name if func_name != None else '')
+
+		return '_' + str(ndim1) + '_' + str(ndim2) + '_' + type_qualifier
+
+	@staticmethod
+	def check_integer(t: CudaTensor, func_name: str):
+		if t.dtype != cp.int32:
+			raise RuntimeError(t.name + ' was not integer in ' + func_name)
+
+	@staticmethod
+	def check_scalar(t: CudaTensor, func_name: str):
+		if max(t.shape) != 1:
+			raise RuntimeError(t.name + ' was not scalar in ' + func_name)
+
+	@staticmethod
+	def check_fp32_or_fp64(t: CudaTensor, func_name: str):
+		type: str
+		if t.dtype == cp.float32:
+			type = 'float'
+		elif t.dtype == cp.float64:
 			type = 'double'
 		else:
-			raise RuntimeError(func_name + ' does only support fp32 and fp64')
+			raise RuntimeError(t.name + ' was not fp32 and fp64 in ' + func_name)
 
 		return type
 
@@ -60,7 +90,7 @@ class CudaTensorChecking:
 		raise RuntimeError(vec.name + ' had no singleton dimension in ' + func_name)
 
 	@staticmethod
-	def check_is_same(t1: CudaTensor, t2: CudaTensor, func_name: str):
+	def check_is_same_shape(t1: CudaTensor, t2: CudaTensor, func_name: str):
 		if t1.shape != t2.shape:
 			raise RuntimeError(t1.name + ' and ' + t2.name + ' must have equal shape in ' + func_name)
 
@@ -93,4 +123,22 @@ class CudaTensorChecking:
 		if v.shape[0] != m.shape[0]:
 			raise RuntimeError(v.name + ' and ' + m.name + ' must have the same batch dimension')
 
-	
+
+def gen_deps_dict(func: CudaFunction, deps: list[CudaFunction], keys: set[str]):
+	for f in func.get_deps():
+		gen_deps_dict(f, deps, keys)
+
+	fid = func.get_funcid()
+	if fid not in keys:
+		deps.append(func)
+		keys.add(fid)
+
+def code_gen_walking(func: CudaFunction, code: str):
+	deps: list[CudaFunction] = []
+	keys: set[str] = set()
+	gen_deps_dict(func, deps, keys)
+
+	for f in deps:
+		code += f.get_code()
+
+	return code
