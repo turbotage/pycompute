@@ -10,24 +10,26 @@ def max_mag_funcid(nrow: int, ncol: int, dtype: cp.dtype):
 	return 'max_mag' + ctc.dim_dim_type_funcid(nrow, ncol, dtype)
 
 def max_mag_code(nrow: int, ncol: int, dtype: cp.dtype):
-	codestr = Template("""
-	int {{funcid}}({{fp_type}}* mat, int* max_row_idx, int* max_col_idx, {{fp_type}}* max) {
-		*max_row_idx = 0;
-		*max_col_idx = 0;
-		*max = 0.0f;
-		{{fp_type}} val;
-		for (int i = 0; i < {{nrow}}; ++i) {
-			for (int j = 0; j < {{ncol}}; ++j) {
-				val = mat[i*{{ncol}} + j];
-				if (val > max) {
-					*max_row_idx = i;
-					*max_col_idx = j;
-					max = val;
-				}
+	codestr = Template(
+"""
+__device__
+int {{funcid}}({{fp_type}}* mat, int* max_row_idx, int* max_col_idx, {{fp_type}}* max) {
+	*max_row_idx = 0;
+	*max_col_idx = 0;
+	*max = 0.0f;
+	{{fp_type}} val;
+	for (int i = 0; i < {{nrow}}; ++i) {
+		for (int j = 0; j < {{ncol}}; ++j) {
+			val = mat[i*{{ncol}} + j];
+			if (val > max) {
+				*max_row_idx = i;
+				*max_col_idx = j;
+				max = val;
 			}
 		}
 	}
-	""")
+}
+""")
 
 	type = ctc.check_fp32_or_fp64(CudaTensor(None, dtype), 'max_mag')
 
@@ -72,20 +74,22 @@ def max_mag_subrow_funcid(nrow: int, ncol: int, dtype: cp.dtype):
 	return 'max_mag_subrow' +  ctc.dim_dim_type_funcid(nrow, ncol, dtype)
 
 def max_mag_subrow_code(nrow: int, ncol: int, dtype: cp.dtype):
-	codestr = Template("""
-	void {{funcid}}({{fp_type}}* mat, int row, int start_col, int* max_idx, {{fp_type}}* max) {
-		*max_idx = 0;
-		*max = 0.0f;
-		{{fp_type}} val;
-		for (int i = start_col; i < {{ncol}}; ++i) {
-			val = mat[{{nrow}}*{{ncol}} + i];
-			if (val > max) {
-				*max_idx = i;
-				*max = val;
-			}
+	codestr = Template(
+"""
+__device__
+void {{funcid}}({{fp_type}}* mat, int row, int start_col, int* max_idx, {{fp_type}}* max) {
+	*max_idx = 0;
+	*max = 0.0f;
+	{{fp_type}} val;
+	for (int i = start_col; i < {{ncol}}; ++i) {
+		val = mat[{{nrow}}*{{ncol}} + i];
+		if (val > max) {
+			*max_idx = i;
+			*max = val;
 		}
 	}
-	""")
+}
+""")
 
 	type = ctc.check_fp32_or_fp64(CudaTensor(None, dtype), 'max_mag_subrow')
 
@@ -136,18 +140,20 @@ def max_diag_abs_funcid(ndim: int, dtype: cp.dtype):
 	return 'max_diag_abs' + ctc.dim_type_funcid(ndim, dtype)
 
 def max_diag_abs_code(ndim: int, dtype: cp.dtype):
-	codestr = Template("""
-	int {{funcid}}({{fp_type}}* mat, int offset) {
-		{{fp_type}} max_abs = -1.0f;
-		int max_index = 0;
-		for (int i = offset; i < {{ndim}}; ++i) {
-			if ({abs_funcid}(mat[i*{{ndim}} + i]) > max_abs) {
-				max_index = i;
-			}
+	codestr = Template(
+"""
+__device__
+int {{funcid}}({{fp_type}}* mat, int offset) {
+	{{fp_type}} max_abs = -1.0f;
+	int max_index = 0;
+	for (int i = offset; i < {{ndim}}; ++i) {
+		if ({{abs_funcid}}(mat[i*{{ndim}} + i]) > max_abs) {
+			max_index = i;
 		}
-		return max_index;
 	}
-	""")
+	return max_index;
+}
+""")
 
 	type = ctc.check_fp32_or_fp64(CudaTensor(None, dtype), 'max_diag_abs')
 
@@ -184,16 +190,18 @@ def row_interchange_i_funcid(ncol: int, dtype: cp.dtype):
 	return 'row_interchange_i' + ctc.dim_type_funcid(ncol, dtype)
 
 def row_interchange_i_code(ncol: int, dtype: cp.dtype):
-	codestr = Template("""
-	void {{funcid}}({{fp_type}}* mat, int ii, int jj) {
-		for (int k = 0; k < {{ncol}}; ++k) {
-			{{fp_type}} temp;
-			temp = mat[ii*{{ncol}} + k];
-			mat[ii*{{ncol}} + k] = mat[jj*{{ncol}} + k];
-			mat[jj*{{ncol}} + k] = temp;
-		}
+	codestr = Template(
+"""
+__device__
+void {{funcid}}({{fp_type}}* mat, int ii, int jj) {
+	for (int k = 0; k < {{ncol}}; ++k) {
+		{{fp_type}} temp;
+		temp = mat[ii*{{ncol}} + k];
+		mat[ii*{{ncol}} + k] = mat[jj*{{ncol}} + k];
+		mat[jj*{{ncol}} + k] = temp;
 	}
-	""")
+}
+""")
 
 	type = ctc.check_fp32_or_fp64(CudaTensor(None, dtype), 'row_interchange_i')
 
@@ -232,16 +240,18 @@ def col_interchange_i_funcid(nrow: int, ncol: int, dtype: cp.dtype):
 	return 'col_interchange_i' + ctc.dim_dim_type_funcid(nrow, ncol, dtype)
 
 def col_interchange_i_code(nrow: int, ncol: int, dtype: cp.dtype):
-	codestr = Template("""
-	void {{funcid}}({{fp_type}}* mat, int ii, int jj) {
-		for (int k = 0; k < {{nrow}}; ++k) {
-			{{fp_type}} temp;
-			temp = mat[k*{{ncol}} + ii];
-			mat[k*{{ncol}} + ii] = mat[k*{{ncol}} + jj];
-			mat[k*{{ncol}} + jj] = temp;
-		}
+	codestr = Template(
+"""
+__device__
+void {{funcid}}({{fp_type}}* mat, int ii, int jj) {
+	for (int k = 0; k < {{nrow}}; ++k) {
+		{{fp_type}} temp;
+		temp = mat[k*{{ncol}} + ii];
+		mat[k*{{ncol}} + ii] = mat[k*{{ncol}} + jj];
+		mat[k*{{ncol}} + jj] = temp;
 	}
-	""")
+}
+""")
 
 	type = ctc.check_fp32_or_fp64(CudaTensor(None, dtype), 'col_interchange_i')
 
@@ -280,21 +290,23 @@ def diag_pivot_funcid(ndim: int, dtype: cp.dtype):
 	return 'diag_pivot' + ctc.dim_type_funcid(ndim, dtype)
 
 def diag_pivot_code(ndim: int, dtype: cp.dtype):
-	codestr = Template("""
-	void {{funcid}}({{fp_type}}* mat, int* perm) {
-		for (int i = 0; i < {{ndim}}; ++i) {
-			perm[i] = i;
-		}
-		for (int i = 0; i < {{ndim}}; ++i) {
-			int max_abs = {{max_diag_abs_funcid}}(mat, i);
-			{{row_inter_i_funcid}}(mat, i, max_abs);
-			{{col_inter_i_funcid}}(mat, i, max_abs);
-			int temp = perm[i];
-			perm[i] = perm[max_abs];
-			perm[max_abs] = temp;
-		}
+	codestr = Template(
+"""
+__device__
+void {{funcid}}({{fp_type}}* mat, int* perm) {
+	for (int i = 0; i < {{ndim}}; ++i) {
+		perm[i] = i;
 	}
-	""")
+	for (int i = 0; i < {{ndim}}; ++i) {
+		int max_abs = {{max_diag_abs_funcid}}(mat, i);
+		{{row_inter_i_funcid}}(mat, i, max_abs);
+		{{col_inter_i_funcid}}(mat, i, max_abs);
+		int temp = perm[i];
+		perm[i] = perm[max_abs];
+		perm[max_abs] = temp;
+	}
+}
+""")
 
 	type = ctc.check_fp32_or_fp64(CudaTensor(None, dtype), 'diag_pivot')
 
@@ -337,13 +349,15 @@ def permute_vec_funcid(ndim: int, dtype: cp.dtype):
 	return 'permute_vec' + ctc.dim_type_funcid(ndim, dtype)
 
 def permute_vec_code(ndim: int, dtype: cp.dtype):
-	codestr = Template("""
-	void {{funcid}}({{fp_type}}* vec, const int* perm, {{fp_type}}* ovec) {
-		for (int i = 0; i < {{ndim}}; ++i) {
-			ovec[i] = vec[perm[i]];
-		}
+	codestr = Template(
+"""
+__device__
+void {{funcid}}({{fp_type}}* vec, const int* perm, {{fp_type}}* ovec) {
+	for (int i = 0; i < {{ndim}}; ++i) {
+		ovec[i] = vec[perm[i]];
 	}
-	""")
+}
+""")
 
 	type = ctc.check_fp32_or_fp64(CudaTensor(None, dtype), 'permute_vec')
 
@@ -393,13 +407,15 @@ def inv_permute_vec_funcid(ndim: int, dtype: cp.dtype):
 	return 'inv_permute_vec' + ctc.dim_type_funcid(ndim, dtype)
 
 def inv_permute_vec_code(ndim: int, dtype: cp.dtype):
-	codestr = Template("""
-	void {{funcid}}({{fp_type}}* vec, const int* perm, {{fp_type}}* ovec) {
-		for (int i = 0; i < {{ndim}}; ++i) {
-			ovec[perm[i]] = vec[i];
-		}
+	codestr = Template(
+"""
+__device__
+void {{funcid}}({{fp_type}}* vec, const int* perm, {{fp_type}}* ovec) {
+	for (int i = 0; i < {{ndim}}; ++i) {
+		ovec[perm[i]] = vec[i];
 	}
-	""")
+}
+""")
 
 	type = ctc.check_fp32_or_fp64(CudaTensor(None, dtype), 'inv_permute_vec')
 

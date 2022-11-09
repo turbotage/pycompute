@@ -139,6 +139,6 @@ def code_gen_walking(func: CudaFunction, code: str):
 	gen_deps_dict(func, deps, keys)
 
 	for f in deps:
-		code += f.get_code()
+		code += f.get_code() + '\n'
 
 	return code
