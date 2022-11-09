@@ -5,9 +5,11 @@ import cuda.cuda_program as cuda_cp
 from cuda.cuda_program import CudaTensor, CudaFunction
 from cuda.linalg import GMW81Solver
 
+import time
+
 import torch
 
-batch_size = 1000000
+batch_size = 10000000
 #cpu_mat = np.random.rand(batch_size, 4, 4, dtype=np.float32)
 cpu_mat = torch.rand((batch_size, 4, 4), dtype=torch.float32)
 cpu_mat = torch.bmm(cpu_mat.transpose(1,2), cpu_mat)
@@ -41,19 +43,27 @@ gmw81_kernal = gmw81_module.get_function('bk_' + gmw81solver.get_funcid())
 
 print(gmw81_kernal.attributes)
 
-blockSize = np.ceil(batch_size / gmw81_kernal.attributes['max_threads_per_block'])
+Nthreads = 256
+blockSize = max(np.ceil(batch_size / Nthreads).astype(int), 1)
 
-blockSize = max(np.ceil(np.sqrt(blockSize)).astype(int), 1)
+print('blockSize: ' + str(blockSize))
 
-print(gpu_mat[0,:])
-print(gpu_rhs[0,:])
-print(gpu_sol[0,:])
 
-temp_sol = cp.linalg.solve(gpu_mat[0,:], gpu_rhs[0,:])
-print(temp_sol)
+ns = [0, blockSize - 1, blockSize, batch_size - 1]
 
-gmw81_kernal((blockSize,), (blockSize,), (gpu_mat, gpu_rhs, gpu_sol, batch_size))
+for ni in ns:
+    temp_sol = cp.linalg.solve(gpu_mat[ni,:], gpu_rhs[ni,:])
+    print(temp_sol)
 
-print(gpu_mat[0,:])
-print(gpu_rhs[0,:])
-print(gpu_sol[0,:])
+print('Before kernel')
+
+start = time.time()
+gmw81_kernal((blockSize,), (Nthreads,), (gpu_mat, gpu_rhs, gpu_sol, batch_size))
+cp.cuda.stream.get_current_stream().synchronize()
+end = time.time()
+
+print('After kernel')
+print('It took: ' + str(end - start) + ' s')
+
+for ni in ns:
+    print(gpu_sol[ni,:])
