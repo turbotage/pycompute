@@ -27,15 +27,43 @@ class CCodePrinter:
             code_lines.append(code_line)
         return '\n'.join(code_lines)
 
+class CUDAPrinter:
 
-expr = sympify('S0*(f*exp(-b*D_1) + (1-f)*exp(-b*D_2))')
+	def __init__(self):
+		self.cprinter = CCodePrinter()
 
-def walk_expr(expr):
-	print(expr.args)
-	if len(expr.args) > 0:
-		walk_expr(expr.args[0])
-	if len(expr.args) > 1:
-		walk_expr(expr.args[1])
+	def tcs_f(self, sym_expr):
+		sstr = self.cprinter.doprint(sym_expr)
+		sstr.replace('exp(', 'expf(')
+		sstr.replace('cos(', 'cosf(')
+		sstr.replace('sin(', 'sinf(')
+		sstr.replace('tan(', 'tanf(')
+		sstr.replace('acos(', 'acosf(')
+		sstr.replace('asin(', 'asinf(')
+		sstr.replace('atan(', 'atanf(')
+		sstr.replace('cosh(', 'coshf(')
+		sstr.replace('sinh(', 'sinhf(')
+		sstr.replace('tanh(', 'tanhf(')
+		sstr.replace('acosh(', 'acoshf(')
+		sstr.replace('asinh(', 'asinhf(')
+		sstr.replace('atanh(', 'atanhf(')
+		sstr.replace('sqrt(', 'sqrtf(')
+		sstr.replace('rsqrt', 'rsqrtf')
+		return sstr
+
+	def tcs_d(self, sym_expr):
+		sstr = self.cprinter.doprint(sym_expr)
+		return sstr
+
+
+#expr = sympify('S0*(f*exp(-b*D_1) + (1-f)*exp(-b*D_2))')
+
+#def walk_expr(expr):
+#	print(expr.args)
+#	if len(expr.args) > 0:
+#		walk_expr(expr.args[0])
+#	if len(expr.args) > 1:
+#		walk_expr(expr.args[1])
 
 
 #walk_expr(expr)
@@ -43,8 +71,7 @@ def walk_expr(expr):
 def res(expr, pars, consts):
 	resexpr = sympify(expr)
 	substs, reduced = cse([resexpr])
-	print(substs)
-	print(reduced)
+	return (substs, reduced)
 
 def jac(expr, pars, consts):
 	resexpr = sympify(expr)
@@ -54,8 +81,7 @@ def jac(expr, pars, consts):
 		exprs.append(resexpr.diff(e))
 
 	substs, reduced = cse(exprs)
-	print(substs)
-	print(reduced)
+	return (substs, reduced)
 
 def hes(expr, pars, consts):
 	resexpr = sympify(expr)
@@ -66,8 +92,7 @@ def hes(expr, pars, consts):
 			exprs.append(resexpr.diff(pars[i]).diff(pars[j]))
 
 	substs, reduced = cse(exprs)
-	print(substs)
-	print(reduced)
+	return (substs, reduced)
 
 def res_jac(expr, pars, consts):
 	resexpr = sympify(expr)
@@ -77,8 +102,7 @@ def res_jac(expr, pars, consts):
 		exprs.append(resexpr.diff(e))
 
 	substs, reduced = cse(exprs)
-	print(substs)
-	print(reduced)
+	return (substs, reduced)
 
 def res_jac_hes(expr, pars, consts):
 	resexpr = sympify(expr)
@@ -92,14 +116,12 @@ def res_jac_hes(expr, pars, consts):
 			exprs.append(resexpr.diff(pars[i]).diff(pars[j]))
 
 	substs, reduced = cse(exprs)
-	print(substs)
-	print(reduced)
+	return (substs,  reduced)
 
 expr = 'S0*(f*exp(-b*D_1)+(1-f)*exp(-b*D_2))+D_1**2'
 expr_sym = sympify(expr)
 
-print(CCodePrinter().doprint(expr_sym))
-
+#print(CCodePrinter().doprint(expr_sym))
 
 res_jac_hes_temp = Template(
 """
@@ -111,11 +133,13 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts,
 	{{zero_mat_funcid}}(hes);
 
 	for (int i = 0; i < {{ndata}}; ++i) {
-		{{res_expr}}
+{{sub_expr}}
 
-		{{jac_expr}}
+{{res_expr}}
 
-		{{hes_expr}}
+{{jac_expr}}
+
+{{hes_expr}}
 	}
 
 	for (int i = 1; i < {{npar}}; ++i) {
@@ -129,7 +153,51 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts,
 }
 """)
 
+pars = ['S0', 'f', 'D_1', 'D_2']
+consts = ['b']
+
+substs, reduced = res_jac_hes(expr, pars, consts)
+
+cuprint = CUDAPrinter()
+fp_type_str = 'float'
+
+
+
+sub_str = ""
+print('substr')
+for s in substs:
+	sub_str += '\t\t'+fp_type_str+' '+cuprint.tcs_f(s[0])+' = '+cuprint.tcs_f(s[1])+';\n'
+print(sub_str)
+
 res_str = ""
+print('res')
+for s in reduced[:1]:
+	res_str += '\t\tres[i] = '+cuprint.tcs_f(s)+';'
+print(res_str)
+
+jac_str = ""
+print('jac')
+i = 0
+for s in reduced[1:(len(pars) + 1)]:
+	jac_str += '\t\tjac[i*'+str(len(pars))+'+'+str(i)+'] = '+cuprint.tcs_f(s)+';\n'
+	i += 1
+print(jac_str)
+
+hes_str = ""
+print('hes')
+k = 0
+for i in range(0,len(pars)):
+	for j in range(0,i+1):
+		s = reduced[len(pars) + k + 1]
+		hes_str += '\t\thes['+str(i)+'*'+str(len(pars))+'+'+str(j)+'] += '+cuprint.tcs_f(s)+';\n'
+		k += 1
+print(hes_str)
+	
+
+rjh_kernel = res_jac_hes_temp.render(sub_expr=sub_str, res_expr=res_str, 
+	jac_expr=jac_str, hes_expr=hes_str)
+
+print(rjh_kernel)
 
 
 #print('res')
