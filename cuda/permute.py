@@ -51,7 +51,7 @@ class MaxMag(CudaFunction):
 		self.max_row_idx = max_row_idx
 		self.max_col_idx = max_col_idx
 		self.max = max
-
+	
 	def __init__(self, mat: CudaTensor):
 		func_name = 'max_mag'
 		ctc.check_fp32_or_fp64(mat, func_name)

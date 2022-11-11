@@ -51,6 +51,18 @@ class CudaTensorChecking:
 		return '_' + str(ndim1) + '_' + str(ndim2) + '_' + type_qualifier
 
 	@staticmethod
+	def dim_dim_dim_type_funcid(ndim1: int, ndim2: int, ndim3: int, dtype: cp.dtype, func_name: str = None):
+		type_qualifier: str
+		if dtype == cp.float32:
+			type_qualifier = 'f'
+		elif dtype == cp.float64:
+			type_qualifier = 'd'
+		else:
+			raise RuntimeError('does only support fp32 and fp64 in ' + func_name if func_name != None else '')
+
+		return '_' + str(ndim1) + '_' + str(ndim2) + '_' + str(ndim3) + ' ' + type_qualifier
+
+	@staticmethod
 	def check_integer(t: CudaTensor, func_name: str):
 		if t.dtype != cp.int32:
 			raise RuntimeError(t.name + ' was not integer in ' + func_name)
