@@ -3,14 +3,14 @@ from jinja2 import Template
 import cupy as cp
 #from numba import jit
 
-from .cuda_program import CudaFunction, CudaTensor
-from .cuda_program import CudaTensorChecking as ctc
+from cuda.cuda_program import CudaFunction, CudaTensor
+from cuda.cuda_program import CudaTensorChecking as ctc
 
 from . import permute
 
 # A = L @ D @ L^T
 def zero_mat_funcid(nrow: int, ncol: int, dtype: cp.dtype):
-	return 'zero_mat' + ctc.dim_type_funcid(nrow, ncol, dtype, 'zero_mat')
+	return 'zero_mat' + ctc.dim_dim_type_funcid(nrow, ncol, dtype, 'zero_mat')
 
 def zero_mat_code(nrow: int, ncol: int, dtype: cp.dtype):
 	codestr = Template(
@@ -43,14 +43,63 @@ class ZeroMat(CudaFunction):
 		return list()
 
 
+def mul_transpose_mat_funcid(nrow: int, ncol: int, dtype: cp.dtype):
+	return 'mul_transpose_mat' + ctc.dim_dim_type_funcid(nrow, ncol, dtype, 'mul_transpose_mat')
+
+def mul_transpose_mat_code(nrow: int, ncol: int, dtype: cp.dtype):
+	codestr = Template(
+"""
+__device__
+void {{funcid}}(const {{fp_type}}* mat, {{fp_type}}* omat) {
+	{{fp_type}} entry;
+	for (int i = 0; i < {{ncol}}; ++i) {
+		for (int j = 0; j <= i; ++j) {
+			entry = 0.0f;
+			for (int k = 0; k < {{nrow}}; ++k) {
+				entry += mat[k*{{ncol}}+i] * mat[k*{{ncol}}+j];
+			}
+			omat[i*{{ncol}}+j] = entry;
+			if (i != j) {
+				omat[j*{{ncol}}+i] = entry;
+			}
+		}
+	}
+}
+""")
+
+	type = ctc.check_fp32_or_fp64(CudaTensor(None, dtype), 'mul_transpose_diag_mat')
+
+	funcid = mul_transpose_mat_funcid(nrow, ncol, dtype)
+
+	return codestr.render(funcid=funcid, fp_type=type, nrow=nrow, ncol=ncol)
+
+class MulTransposeMat(CudaFunction):
+	def __init__(self, mat: CudaTensor, diag: CudaTensor):
+		self.mat = mat
+		self.diag = diag
+
+	def __init__(self, mat: CudaTensor):
+		self.mat = mat
+		self.diag = None
+
+	def get_funcid(self):
+		return mul_transpose_mat_funcid(self.mat.shape[1], self.mat.shape[2], self.mat.dtype)
+
+	def get_code(self):
+		return mul_transpose_mat_code(self.mat.shape[1], self.mat.shape[2], self.mat.dtype)
+
+	def get_deps(self):
+		return list()
+
+
 def mul_transpose_diag_mat_funcid(nrow: int, ncol: int, dtype: cp.dtype):
-	return 'mul_transpose_diag_mat' + ctc.dim_type_funcid(nrow, ncol, dtype, 'mul_transpose_diag_mat')
+	return 'mul_transpose_diag_mat' + ctc.dim_dim_type_funcid(nrow, ncol, dtype, 'mul_transpose_diag_mat')
 
 def mul_transpose_diag_mat_code(nrow: int, ncol: int, dtype: cp.dtype):
 	codestr = Template(
 """
 __device__
-void {{funcid}}({{fp_type}}* mat, {{fp_type}}* diag, {{fp_type}}* omat) {
+void {{funcid}}(const {{fp_type}}* mat, const {{fp_type}}* diag, {{fp_type}}* omat) {
 	{{fp_type}} entry;
 	for (int i = 0; i < {{ncol}}; ++i) {
 		for (int j = 0; j <= i; ++j) {
@@ -99,7 +148,7 @@ def add_mat_mat_ldiag_code(ndim: int, dtype: cp.dtype):
 	codestr = Template(
 """
 __device__
-void {{funcid}}({{fp_type}}* mat {{fp_type}} lambda, {{fp_type}}* lmat) {
+void {{funcid}}({{fp_type}}* mat, {{fp_type}} lambda, {{fp_type}}* lmat) {
 	float entry1;
 	float entry2;
 	for (int i = 0; i < {{ndim}}; ++i) {
@@ -107,7 +156,7 @@ void {{funcid}}({{fp_type}}* mat {{fp_type}} lambda, {{fp_type}}* lmat) {
 			entry1 = mat[i*{{ndim}}+j];
 			entry2 = lmat[i*{{ndim}}+j];
 			mat[i*{{ndim}}+j] += entry2;
-			mat[i*{{ndim}}+j] += entry1;
+			lmat[i*{{ndim}}+j] += entry1;
 			if (i == j) {
 				lmat[i*{{ndim}}+j] += lambda * entry2;
 			}

@@ -60,7 +60,7 @@ class CudaTensorChecking:
 		else:
 			raise RuntimeError('does only support fp32 and fp64 in ' + func_name if func_name != None else '')
 
-		return '_' + str(ndim1) + '_' + str(ndim2) + '_' + str(ndim3) + ' ' + type_qualifier
+		return '_' + str(ndim1) + '_' + str(ndim2) + '_' + str(ndim3) + '_' + type_qualifier
 
 	@staticmethod
 	def check_integer(t: CudaTensor, func_name: str):
