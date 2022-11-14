@@ -3,7 +3,7 @@ import cupy as cp
 
 import cuda.cuda_program as cuda_cp
 from cuda.cuda_program import CudaTensor, CudaFunction
-from cuda.nlsq_sym import NLSQResJacHesLHes
+from cuda.nlsq_sym import NLSQResJacHesLHes, NLSQResJacHesLHesW, NLSQResJacJTJ
 
 import time
 import torch
@@ -13,17 +13,6 @@ nparam = 4
 nconst = 1
 
 batch_size = 1000000
-#cpu_mat = np.random.rand(batch_size, 4, 4, dtype=np.float32)
-#cpu_mat = torch.rand((batch_size, 4, 4), dtype=torch.float32)
-#cpu_mat = torch.bmm(cpu_mat.transpose(1,2), cpu_mat)
-#cpu_mat = cpu_mat.numpy()
-
-#cpu_rhs = np.random.rand(batch_size, 4, 1).astype(np.float32)
-#cpu_sol = np.zeros((batch_size, 4, 1), dtype=np.float32)
-
-#gpu_mat = cp.asarray(cpu_mat.copy())
-#gpu_rhs = cp.asarray(cpu_rhs.copy())
-#gpu_sol = cp.asarray(cpu_sol.copy())
 
 
 def from_cu_tensor(t: CudaTensor, rand=False):
@@ -41,6 +30,9 @@ consts_t = from_cu_tensor(consts, True)
 data = CudaTensor([batch_size, ndata, 1], cp.float32)
 data_t = from_cu_tensor(data, True)
 
+weights = CudaTensor([batch_size, ndata, 1], cp.float32)
+weights_t = from_cu_tensor(weights, True)
+
 res = CudaTensor([batch_size, ndata, 1], cp.float32)
 res_t = from_cu_tensor(res)
 
@@ -57,7 +49,9 @@ expr = 'S0*(f*exp(-b*D_1)+(1-f)*exp(-b*D_2))'
 pars_str = ['S0', 'f', 'D_1', 'D_2']
 consts_str = ['b']
 
+#nlsq_rjh = NLSQResJacJTJ(expr, pars_str, consts_str, pars, consts, data, res, jac, hes)
 nlsq_rjh = NLSQResJacHesLHes(expr, pars_str, consts_str, pars, consts, data, res, jac, hes, lhes)
+#nlsq_rjh = NLSQResJacHesLHesW(expr, pars_str, consts_str, pars, consts, data, weights, res, jac, hes, lhes)
 
 nlsq_code = cuda_cp.code_gen_walking(nlsq_rjh, "")
 
@@ -78,7 +72,10 @@ ns = [0, blockSize - 1, blockSize, batch_size - 1]
 
 print('Before kernel')
 start = time.time()
-nlsq_kernel((blockSize,), (Nthreads,), (pars_t, consts_t, data_t, cp.float32(0.0), res_t, jac_t, hes_t, lhes_t, batch_size))
+for i in range(0,1):
+    #nlsq_kernel((blockSize,), (Nthreads,), (pars_t, consts_t, data_t, res_t, jac_t, hes_t, batch_size))
+    nlsq_kernel((blockSize,), (Nthreads,), (pars_t, consts_t, data_t, cp.float32(0.0), res_t, jac_t, hes_t, lhes_t, batch_size))
+    #nlsq_kernel((blockSize,), (Nthreads,), (pars_t, consts_t, data_t, weights_t, cp.float32(0.0), res_t, jac_t, hes_t, lhes_t, batch_size))
 cp.cuda.stream.get_current_stream().synchronize()
 end = time.time()
 print('After kernel')

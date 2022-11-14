@@ -67,15 +67,12 @@ void nlsq_res_jac_hes_lhes_21_4_1_f_f7def86f0a03(const float* params, const floa
 		jac[i*4+3] = -x7*params[0];
 
 
-		hes[0*4+0] += 0 * res[i];
 		hes[1*4+0] += x5 * res[i];
-		hes[1*4+1] += 0 * res[i];
 		hes[2*4+0] += -x1*consts[i*1+0] * res[i];
 		hes[2*4+1] += -x0*x6 * res[i];
 		hes[2*4+2] += x1*x8 * res[i];
 		hes[3*4+0] += -x7 * res[i];
 		hes[3*4+1] += x2*x6 * res[i];
-		hes[3*4+2] += 0 * res[i];
 		hes[3*4+3] += x3*x8 * res[i];
 
 	}

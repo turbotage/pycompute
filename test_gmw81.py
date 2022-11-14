@@ -3,13 +3,13 @@ import cupy as cp
 
 import cuda.cuda_program as cuda_cp
 from cuda.cuda_program import CudaTensor, CudaFunction
-from cuda.linalg import GMW81Solver
+from cuda.solver import GMW81Solver
 
 import time
 
 import torch
 
-batch_size = 10000000
+batch_size = 1000000
 #cpu_mat = np.random.rand(batch_size, 4, 4, dtype=np.float32)
 cpu_mat = torch.rand((batch_size, 4, 4), dtype=torch.float32)
 cpu_mat = torch.bmm(cpu_mat.transpose(1,2), cpu_mat)
