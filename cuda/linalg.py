@@ -18,6 +18,7 @@ def sum_every_n_upto_m_code(n: int, m: int, dtype: cp.dtype):
 	
 	rjh_temp = Template(
 """
+__device__
 void {{funcid}}({{fp_type}}* sred, unsigned int N) 
 {
 	unsigned int tid = blockDim.x * blockIdx.x + threadIdx.x;
@@ -57,24 +58,34 @@ class SumEveryNUptoM(CudaFunction):
 		return 'k_' + funcid
 
 	def get_device_code(self):
-		return "__device__\n" + self.code
+		return self.code
 
 	def get_kernel_code(self):
-		code = self.code
-		code = code.replace(self.get_device_funcid(), self.get_kernel_funcid())
-		return "extern \"C\" __global__\n" + code
+		temp = Template(
+"""
+extern \"C\" __global__
+void {{funcid}}({{fp_type}}* sred, unsigned int N) 
+{
+	{{dfuncid}}(sred, N);
+}
+""")
+		fid = self.get_kernel_funcid()
+		dfid = self.get_device_funcid()
+
+		return temp.render(funcid=fid, dfuncid=dfid)
 
 	def get_deps(self):
 		return list()
 
 
 def sum_upto_m_funcid(m: int, dtype: cp.dtype):
-	return 'sum_every_n_upto_m' + ctc.dim_dim_type_funcid(n, m, dtype)
+	return 'sum_every_n_upto_m' + ctc.dim_type_funcid(m, dtype)
 
 def sum_upto_m_code(m: int, dtype: cp.dtype):
 	
 	rjh_temp = Template(
 """
+__device__
 void {{funcid}}({{fp_type}}* sred, unsigned int N) 
 {
 {{partial_sums}}
@@ -83,7 +94,7 @@ void {{funcid}}({{fp_type}}* sred, unsigned int N)
 
 	calls = ""
 	n = 1
-	while (m / 2*n) >= 1:
+	while (m / (2*n)) >= 1:
 		ntpm = math.ceil(m / (2*n))
 		calls += '\t' + sum_every_n_upto_m_funcid(n, m, dtype) + '(sred, N);\n'
 		n += 1
@@ -92,8 +103,7 @@ void {{funcid}}({{fp_type}}* sred, unsigned int N)
 	
 	funcid = sum_every_n_upto_m_funcid(n, m, dtype)
 
-	rjh_kernel = rjh_temp.render(funcid=funcid, fp_type=type_str, num_threads_per_m=ntpm,
-		melem=m, nelem=n)
+	rjh_kernel = rjh_temp.render(funcid=funcid, fp_type=type_str, partial_sums=calls)
 
 	return rjh_kernel
 
@@ -103,8 +113,8 @@ class SumUptoM(CudaFunction):
 
 		self.m = m
 
-		self.funcid = sum_every_n_upto_m_funcid(n, m, sred.dtype)
-		self.code = sum_every_n_upto_m_code(n, m, sred.dtype)
+		self.funcid = sum_upto_m_funcid(m, sred.dtype)
+		self.code = sum_upto_m_code(m, sred.dtype)
 
 	def get_device_funcid(self):
 		return self.funcid
@@ -114,18 +124,30 @@ class SumUptoM(CudaFunction):
 		return 'k_' + funcid
 
 	def get_device_code(self):
-		return "__device__\n" + self.code
+		return self.code
 
 	def get_kernel_code(self):
-		code = self.code
-		code = code.replace(self.get_device_funcid(), self.get_kernel_funcid())
-		return "extern \"C\" __global__\n" + code
+		temp = Template(
+"""
+extern \"C\" __global__
+void {{funcid}}({{fp_type}}* sred, unsigned int N) 
+{
+	{{dfuncid}}(sred, N);
+}
+""")
+		fid = self.get_kernel_funcid()
+		dfid = self.get_device_funcid()
+
+		return temp.render(funcid=fid, dfuncid=dfid)
 
 	def get_deps(self):
 		deps = []
 		n = 1
 		while (self.m / 2*n) >= 1:
 			ntpm = math.ceil(self.m / (2*n))
-			deps.append(SumEveryNUptoM(n, self.m, self.sred.dtype))
+			deps.append(SumEveryNUptoM(self.sred, n, self.m))
+			n += 1
 		return deps
+
+
 

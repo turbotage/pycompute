@@ -159,4 +159,6 @@ def code_gen_walking(func: CudaFunction, code: str):
 	for f in deps:
 		code += f.get_device_code() + '\n'
 
+	code += func.get_kernel_code() + '\n'
+
 	return code

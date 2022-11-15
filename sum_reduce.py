@@ -4,7 +4,7 @@ import cupy as cp
 import cuda.cuda_program as cuda_cp
 from cuda.cuda_program import CudaTensor, CudaFunction
 from cuda.symbolic import EvalJacHes
-from cuda.linalg import SumEveryNUptoM
+from cuda.linalg import SumEveryNUptoM, SumUptoM
 
 import time
 import torch
@@ -32,21 +32,22 @@ def from_cu_tensor(t: CudaTensor, rand=False):
 sred = CudaTensor([1, Nelem], cp.float32)
 sred_t = from_cu_tensor(sred, True)
 
-n = 2
 m = 7
 
-sr = SumEveryNUptoM(sred, n, m)
+#sr = SumEveryNUptoM(sred, n, m)
+sr = SumUptoM(sred, m)
 
-ejh_code = sr.get_kernel_code()
+ejh_code = cuda_cp.code_gen_walking(sr, "")
 
 #print(nlsq_code)
 with open("bk_sred.cu", "w") as f:
     f.write(ejh_code)
 
 ejh_kernel = cp.RawKernel(ejh_code, sr.get_funcid())
+
 print(ejh_kernel.attributes)
 
-NthreadPerM = np.ceil(m / (2*n))
+NthreadPerM = np.floor(ndata / 2)
 Nthreads = 128
 blockSize = max(np.ceil(Nelem / Nthreads / NthreadPerM).astype(int), 1)
 
