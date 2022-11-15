@@ -15,7 +15,10 @@ class CudaFunction:
 	def __init__(self):
 		self.deps: dict[str, CudaFunction] = []
 
-	def get_funcid(self):
+	def get_device_funcid(self):
+		raise NotImplementedError()
+
+	def get_kernel_funcid(self):
 		raise NotImplementedError()
 
 	def get_device_code(self):

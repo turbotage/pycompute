@@ -4,7 +4,7 @@ import cupy as cp
 import cuda.cuda_program as cuda_cp
 from cuda.cuda_program import CudaTensor, CudaFunction
 from cuda.symbolic import EvalJacHes
-from cuda.linalg import SubEveryNUptoM
+from cuda.linalg import SumEveryNUptoM
 
 import time
 import torch
@@ -32,10 +32,10 @@ def from_cu_tensor(t: CudaTensor, rand=False):
 sred = CudaTensor([1, Nelem], cp.float32)
 sred_t = from_cu_tensor(sred, True)
 
-n = 1
+n = 2
 m = 7
 
-sr = SubEveryNUptoM(sred, n, m)
+sr = SumEveryNUptoM(sred, n, m)
 
 ejh_code = sr.get_kernel_code()
 
@@ -56,7 +56,7 @@ ns = [0, blockSize - 1, blockSize, Nelem - 1]
 sred_t2 = sred_t.copy()
 print('Before kernel')
 start = time.time()
-for i in range(0,100):
+for i in range(0,1):
     #nlsq_kernel((blockSize,), (Nthreads,), (pars_t, consts_t, data_t, res_t, jac_t, hes_t, batch_size))
     ejh_kernel((blockSize,), (Nthreads,), (sred_t, Nelem))
     #nlsq_kernel((blockSize,), (Nthreads,), (pars_t, consts_t, data_t, weights_t, cp.float32(0.0), res_t, jac_t, hes_t, lhes_t, batch_size))
@@ -65,10 +65,10 @@ end = time.time()
 print('After kernel')
 print('It took: ' + str(end - start) + ' s')
 
-#for ni in ns:
-#    print('Show Iter: ')
-#    print(sred_t[:,ni:(ni+m)])
-#    print(sred_t2[:,ni:(ni+m)])
+for ni in ns:
+    print('Show Iter: ')
+    print(sred_t2[:,ni:(ni+m)])
+    print(sred_t[:,ni:(ni+m)])
 
 
 
