@@ -3,7 +3,7 @@ import cupy as cp
 
 import cuda.cuda_program as cuda_cp
 from cuda.cuda_program import CudaTensor, CudaFunction
-from cuda.nlsq_sym import NLSQResJacHesLHes, NLSQResJacHesLHesW, NLSQResJacJTJ
+from cuda.symbolic import NLSQResJacHesLHes, NLSQResJacHesLHesW, NLSQResJacJTJ
 
 import time
 import torch

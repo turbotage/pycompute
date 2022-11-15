@@ -2,192 +2,61 @@
 from jinja2 import Template
 import cupy as cp
 #from numba import jit
+import numpy as np
+import math
 
 from cuda.cuda_program import CudaFunction, CudaTensor
 from cuda.cuda_program import CudaTensorChecking as ctc
 
 from . import permute
 
-# A = L @ D @ L^T
-def zero_mat_funcid(nrow: int, ncol: int, dtype: cp.dtype):
-	return 'zero_mat' + ctc.dim_dim_type_funcid(nrow, ncol, dtype, 'zero_mat')
 
-def zero_mat_code(nrow: int, ncol: int, dtype: cp.dtype):
-	codestr = Template(
+def sum_every_n_upto_m_funcid(n: int, m: int, dtype: cp.dtype):
+	return 'sum_every_n_upto_m' + ctc.dim_dim_type_funcid(n, m, dtype)
+
+def sum_every_n_upto_m_code(n: int, m: int, dtype: cp.dtype):
+	
+	rjh_temp = Template(
 """
-__device__
-void {{funcid}}({{fp_type}}* mat) {
-	for (int i = 0; i < {{nrow}}*{{ncol}}; ++i) {
-		mat[i] = 0.0f;
+void {{funcid}}({{fp_type}}* sred, unsigned int N) 
+{
+	unsigned int tid = blockDim.x * blockIdx.x + threadIdx.x;
+	unsigned int rem = tid % {{num_threads_per_m}};
+	unsigned int nid = (tid - rem) * {{melem}} / {{num_threads_per_m}} + 2 * rem * {{nelem}};
+
+	if (nid < N && rem != {{num_threads_per_m}}) {
+		sred[nid] += sred[nid+{{nelem}}];
 	}
+
 }
 """)
 
-	type = ctc.check_fp32_or_fp64(CudaTensor(None, dtype), 'zero_mat')
+	ntpm = math.ceil(m / (2*n))
 
-	funcid = zero_mat_funcid(nrow, ncol, dtype)
+	type_str = ctc.check_fp32_or_fp64(CudaTensor(None, dtype), 'sum_every_n_upto_m')
+	
+	funcid = sum_every_n_upto_m_funcid(n, m, dtype)
 
-	return codestr.render(funcid=funcid, fp_type=type, nrow=nrow, ncol=ncol)
+	rjh_kernel = rjh_temp.render(funcid=funcid, fp_type=type_str, num_threads_per_m=ntpm,
+		melem=m, nelem=n)
 
-class ZeroMat(CudaFunction):
-	def __init__(self, mat: CudaTensor):
-		self.mat = mat
+	return rjh_kernel
 
-	def get_funcid(self):
-		return zero_mat_funcid(self.mat.shape[1], self.mat.shape[2], self.mat.dtype)
+class SubEveryNUptoM(CudaFunction):
+	def __init__(self, sred: CudaTensor, n: int, m: int):
+		self.sred = sred
 
-	def get_code(self):
-		return zero_mat_code(self.mat.shape[1], self.mat.shape[2], self.mat.dtype)
-
-	def get_deps(self):
-		return list()
-
-
-def mul_transpose_mat_funcid(nrow: int, ncol: int, dtype: cp.dtype):
-	return 'mul_transpose_mat' + ctc.dim_dim_type_funcid(nrow, ncol, dtype, 'mul_transpose_mat')
-
-def mul_transpose_mat_code(nrow: int, ncol: int, dtype: cp.dtype):
-	codestr = Template(
-"""
-__device__
-void {{funcid}}(const {{fp_type}}* mat, {{fp_type}}* omat) {
-	{{fp_type}} entry;
-	for (int i = 0; i < {{ncol}}; ++i) {
-		for (int j = 0; j <= i; ++j) {
-			entry = 0.0f;
-			for (int k = 0; k < {{nrow}}; ++k) {
-				entry += mat[k*{{ncol}}+i] * mat[k*{{ncol}}+j];
-			}
-			omat[i*{{ncol}}+j] = entry;
-			if (i != j) {
-				omat[j*{{ncol}}+i] = entry;
-			}
-		}
-	}
-}
-""")
-
-	type = ctc.check_fp32_or_fp64(CudaTensor(None, dtype), 'mul_transpose_diag_mat')
-
-	funcid = mul_transpose_mat_funcid(nrow, ncol, dtype)
-
-	return codestr.render(funcid=funcid, fp_type=type, nrow=nrow, ncol=ncol)
-
-class MulTransposeMat(CudaFunction):
-	def __init__(self, mat: CudaTensor, diag: CudaTensor):
-		self.mat = mat
-		self.diag = diag
-
-	def __init__(self, mat: CudaTensor):
-		self.mat = mat
-		self.diag = None
+		self.funcid = sum_every_n_upto_m_funcid(n, m, sred.dtype)
+		self.code = sum_every_n_upto_m_code(n, m, sred.dtype)
 
 	def get_funcid(self):
-		return mul_transpose_mat_funcid(self.mat.shape[1], self.mat.shape[2], self.mat.dtype)
+		return self.funcid
 
-	def get_code(self):
-		return mul_transpose_mat_code(self.mat.shape[1], self.mat.shape[2], self.mat.dtype)
+	def get_device_code(self):
+		return "__device__\n" + self.code
 
-	def get_deps(self):
-		return list()
-
-
-def mul_transpose_diag_mat_funcid(nrow: int, ncol: int, dtype: cp.dtype):
-	return 'mul_transpose_diag_mat' + ctc.dim_dim_type_funcid(nrow, ncol, dtype, 'mul_transpose_diag_mat')
-
-def mul_transpose_diag_mat_code(nrow: int, ncol: int, dtype: cp.dtype):
-	codestr = Template(
-"""
-__device__
-void {{funcid}}(const {{fp_type}}* mat, const {{fp_type}}* diag, {{fp_type}}* omat) {
-	{{fp_type}} entry;
-	for (int i = 0; i < {{ncol}}; ++i) {
-		for (int j = 0; j <= i; ++j) {
-			entry = 0.0f;
-			for (int k = 0; k < {{nrow}}; ++k) {
-				entry += mat[k*{{ncol}}+i] * diag[k] * mat[k*{{ncol}}+j];
-			}
-			omat[i*{{ncol}}+j] = entry;
-			if (i != j) {
-				omat[j*{{ncol}}+i] = entry;
-			}
-		}
-	}
-}
-""")
-
-	type = ctc.check_fp32_or_fp64(CudaTensor(None, dtype), 'mul_transpose_diag_mat')
-
-	funcid = mul_transpose_diag_mat_funcid(nrow, ncol, dtype)
-
-	return codestr.render(funcid=funcid, fp_type=type, nrow=nrow, ncol=ncol)
-
-class MulTransposeDiagMat(CudaFunction):
-	def __init__(self, mat: CudaTensor, diag: CudaTensor):
-		self.mat = mat
-		self.diag = diag
-
-	def __init__(self, mat: CudaTensor):
-		self.mat = mat
-		self.diag = None
-
-	def get_funcid(self):
-		return mul_transpose_diag_mat_funcid(self.mat.shape[1], self.mat.shape[2], self.mat.dtype)
-
-	def get_code(self):
-		return mul_transpose_diag_mat_code(self.mat.shape[1], self.mat.shape[2], self.mat.dtype)
-
-	def get_deps(self):
-		return list()
-
-
-def add_mat_mat_ldiag_funcid(ndim: int, dtype: cp.dtype):
-	return 'add_mat_mat_ldiag' + ctc.dim_type_funcid(ndim, dtype, 'add_mat_mat_ldiag')
-
-def add_mat_mat_ldiag_code(ndim: int, dtype: cp.dtype):
-	codestr = Template(
-"""
-__device__
-void {{funcid}}({{fp_type}}* mat, {{fp_type}} lambda, {{fp_type}}* lmat) {
-	float entry1;
-	float entry2;
-	for (int i = 0; i < {{ndim}}; ++i) {
-		for (int j = 0; j < {{ndim}}; ++j) {
-			entry1 = mat[i*{{ndim}}+j];
-			entry2 = lmat[i*{{ndim}}+j];
-			mat[i*{{ndim}}+j] += entry2;
-			lmat[i*{{ndim}}+j] += entry1;
-			if (i == j) {
-				lmat[i*{{ndim}}+j] += lambda * entry2;
-			}
-		}
-	}
-}
-""")
-
-	type = ctc.check_fp32_or_fp64(CudaTensor(None, dtype), 'add_mat_mat_ldiag')
-
-	funcid = add_mat_mat_ldiag_funcid(ndim, dtype)
-
-	return codestr.render(funcid=funcid, fp_type=type, ndim=ndim)
-
-class AddMatMatLdiag(CudaFunction):
-	def __init__(self, mat: CudaTensor, lam: CudaTensor):
-		ctc.check_square_mat(mat, 'add_mat_mat_ldiag')
-		ctc.check_scalar(lam, 'add_mat_mat_ldiag')
-		self.mat = mat
-		self.lam = lam
-
-	def __init__(self, mat: CudaTensor):
-		ctc.check_square_mat(mat, 'add_mat_mat_ldiag')
-		self.mat = mat
-		self.diag = None
-
-	def get_funcid(self):
-		return add_mat_mat_ldiag_funcid(self.mat.shape[1], self.mat.dtype)
-
-	def get_code(self):
-		return add_mat_mat_ldiag_code(self.mat.shape[1], self.mat.dtype)
+	def get_kernel_code(self):
+		return "extern \"C\" __global__\n" + self.code
 
 	def get_deps(self):
 		return list()

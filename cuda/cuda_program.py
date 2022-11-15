@@ -18,7 +18,10 @@ class CudaFunction:
 	def get_funcid(self):
 		raise NotImplementedError()
 
-	def get_code(self):
+	def get_device_code(self):
+		raise NotImplementedError()
+
+	def get_kernel_code(self):
 		raise NotImplementedError()
 
 	def get_deps(self):
@@ -151,6 +154,6 @@ def code_gen_walking(func: CudaFunction, code: str):
 	gen_deps_dict(func, deps, keys)
 
 	for f in deps:
-		code += f.get_code() + '\n'
+		code += f.get_device_code() + '\n'
 
 	return code
