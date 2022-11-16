@@ -143,7 +143,7 @@ void {{funcid}}({{fp_type}}* sred, unsigned int N)
 	def get_deps(self):
 		deps = []
 		n = 1
-		while (self.m / 2*n) >= 1:
+		while (float(self.m) / 2.0*float(n)) >= 1.0:
 			ntpm = math.ceil(self.m / (2*n))
 			deps.append(SumEveryNUptoM(self.sred, n, self.m))
 			n += 1
