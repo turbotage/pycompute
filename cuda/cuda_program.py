@@ -15,6 +15,9 @@ class CudaFunction:
 	def __init__(self):
 		self.deps: dict[str, CudaFunction] = []
 
+	def run(*args):
+		raise NotImplementedError()
+
 	def get_device_funcid(self):
 		raise NotImplementedError()
 
@@ -77,6 +80,18 @@ class CudaTensorChecking:
 	def check_scalar(t: CudaTensor, func_name: str):
 		if max(t.shape) != 1:
 			raise RuntimeError(t.name + ' was not scalar in ' + func_name)
+
+	@staticmethod
+	def type_to_typestr(dtype: cp.dtype):
+		type: str
+		if dtype == cp.float32:
+			type = 'float'
+		elif dtype == cp.float64:
+			type = 'double'
+		else:
+			raise RuntimeError('Invalid type')
+
+		return type
 
 	@staticmethod
 	def check_fp32_or_fp64(t: CudaTensor, func_name: str):

@@ -1,7 +1,10 @@
+import math
+import numpy as np
 
 import cupy as cp
 from jinja2 import Template
 from symengine import sympify
+
 
 #from ..sym import sym
 from sym import util
@@ -11,14 +14,15 @@ from .cuda_program import CudaFunction, CudaTensor
 from .cuda_program import CudaTensorChecking as ctc
 
 
-def eval_jac_hes_funcid(expr: str, pars_str: list[str], consts_str: list[str], nelem: int, dtype: cp.dtype):
-	return 'eval_jac_hes' + ctc.dim_dim_dim_type_funcid(nelem, len(pars_str), len(consts_str), 
+def eval_jac_hes_funcid(expr: str, pars_str: list[str], consts_str: list[str], dtype: cp.dtype):
+	return 'eval_jac_hes' + ctc.dim_dim_type_funcid(len(pars_str), len(consts_str), 
 		dtype, 'eval_jac_hes') + '_' + util.expr_hash(expr, 12)
 
-def eval_jac_hes_code(expr: str, pars_str: list[str], consts_str: list[str], nelem: int, dtype: cp.dtype):
+def eval_jac_hes_code(expr: str, pars_str: list[str], consts_str: list[str], dtype: cp.dtype):
 	
 	rjh_temp = Template(
 """
+__device__
 void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, {{fp_type}}* eval, 
 	{{fp_type}}* jac, {{fp_type}}* hes, unsigned int N) 
 {
@@ -27,7 +31,7 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, {{fp_type}
 
 		{{fp_type}} pars[{{nparam}}];
 		for (int i = 0; i < {{nparam}}; ++i) {
-			pars[i] = params[i*{{nelem}}+tid];
+			pars[i] = params[i*N+tid];
 		}
 
 {{sub_expr}}
@@ -49,7 +53,7 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, {{fp_type}
 	nparam = len(pars_str)
 	nconst = len(consts_str)
 
-	funcid = eval_jac_hes_funcid(expr, pars_str, consts_str, nelem, dtype)
+	funcid = eval_jac_hes_funcid(expr, pars_str, consts_str, dtype)
 
 	sym_expr = sympify(expr)
 	# convert parameter names to ease kernel generation
@@ -120,36 +124,151 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, {{fp_type}
 	return rjh_kernel
 
 class EvalJacHes(CudaFunction):
-	def __init__(self, expr: str, pars_str: list[str], consts_str: list[str],
-		pars: CudaTensor, consts: CudaTensor,
-		eval: CudaTensor, jac: CudaTensor, hes: CudaTensor):
+	def __init__(self, expr: str, pars_str: list[str], consts_str: list[str], dtype: cp.dtype):
 
-		type_str = ctc.check_fp32_or_fp64(pars, 'eval_jac_hes')
-
-		self.pars = pars
-		self.consts = consts
-		self.eval = eval
-		self.jac = jac
-		self.hes = hes
-
-		self.nelem = pars.shape[1]
-		self.type_str = type_str
+		self.type_str = ctc.type_to_typestr(dtype)
 		self.pars_str = pars_str
 		self.consts_str = consts_str
 
-		self.funcid = eval_jac_hes_funcid(expr, pars_str, consts_str, self.nelem, self.pars.dtype)
-		self.code = eval_jac_hes_code(expr, pars_str, consts_str, self.nelem, self.pars.dtype)
+		self.funcid = eval_jac_hes_funcid(expr, pars_str, consts_str, dtype)
+		self.code = eval_jac_hes_code(expr, pars_str, consts_str, dtype)
 
-	def get_funcid(self):
+		self.mod = None
+		self.run_func = None
+
+	def run(self, pars, consts, eval, jac, hes, N):
+		if self.run_func == None:
+			self.build()
+
+		Nthreads = 32
+		blockSize = np.ceil(N / Nthreads)
+		self.run_func((blockSize,),(Nthreads,),(pars, consts, eval, jac, hes, N))
+
+	def get_device_funcid(self):
 		return self.funcid
 
+	def get_kernel_funcid(self):
+		funcid = self.funcid
+		return 'k_' + funcid
+
 	def get_device_code(self):
-		return "__device__" + self.code
+		return self.code
 
 	def get_kernel_code(self):
-		return "extern \"C\" __global__" + self.code
+		temp = Template(
+"""
+extern \"C\" __global__
+void {{funcid}}(const {{fp_type}}* pars, const {{fp_type}}* consts,
+	{{fp_type}}* eval, {{fp_type}}* jac, {{fp_type}}* hes, unsigned int N) 
+{
+	{{dfuncid}}(pars, consts, eval, jac, hes, N);
+}
+""")
+		fid = self.get_kernel_funcid()
+		dfid = self.get_device_funcid()
+
+		return temp.render(funcid=fid, dfuncid=dfid, fp_type=self.type_str)
+
+	def get_full_code(self):
+		code = self.get_device_code() + '\n'
+		code += self.get_kernel_code()
+		return code
+
+	def build(self):
+		self.mod = cp.RawModule(code=self.get_full_code())
+		self.run_func = self.mod.get_function(self.get_kernel_funcid())
 
 	def get_deps(self):
 		return list()
 
+
+def res_hes_funcid(nparam: int, dtype: cp.dtype):
+	return 'res_hes' + ctc.dim_type_funcid(nparam, dtype)
+
+def res_hes_code(nparam: int, dtype: cp.dtype):
+	
+	rjh_temp = Template(
+"""
+__device__
+void {{funcid}}(const {{fp_type}}* data, {{fp_type}}* eval, {{fp_type}}* hes, unsigned int N) 
+{
+	unsigned int tid = blockDim.x * blockIdx.x + threadIdx.x;
+	if (tid < N) {
+		eval[tid] -= data[tid];
+
+		for (int i = 0; i < {{nhes}}; ++i) {
+			hes[i*N+tid] = hes[i*N+tid] * eval[tid];
+		}
+	}
+}
+""")
+
+	type = ctc.check_fp32_or_fp64(CudaTensor(None, dtype), 'res_hes')
+	funcid = res_hes_funcid(nparam, dtype)
+	nhes = round(nparam*(nparam+1)/2)
+
+	rjh_kernel = rjh_temp.render(funcid=funcid, fp_type=type, nhes=nhes)
+	return rjh_kernel
+
+class ResHes(CudaFunction):
+	def __init__(self, nparam: int, dtype: cp.dtype):
+		
+		self.funcid = res_hes_funcid(nparam, dtype)
+		self.code = res_hes_code(nparam, dtype)
+
+		self.type_str = ctc.type_to_typestr(dtype)
+
+		self.mod = None
+		self.run_func = None
+
+	def run(self, pars, consts, eval, jac, hes, N):
+		if self.run_func == None:
+			self.build()
+		Nthreads = 32
+		blockSize = np.ceil(N / Nthreads)
+		self.run_func((blockSize,),(Nthreads,),(pars, consts, eval, jac, hes, N))
+
+	def get_device_funcid(self):
+		return self.funcid
+
+	def get_kernel_funcid(self):
+		funcid = self.funcid
+		return 'k_' + funcid
+
+	def get_device_code(self):
+		return self.code
+
+	def get_kernel_code(self):
+		temp = Template(
+"""
+extern \"C\" __global__
+void {{funcid}}(const {{fp_type}}* data, {{fp_type}}* eval, {{fp_type}}* hes, unsigned int N) 
+{
+	{{dfuncid}}(data, eval, hes, N);
+}
+""")
+		fid = self.get_kernel_funcid()
+		dfid = self.get_device_funcid()
+
+		return temp.render(funcid=fid, dfuncid=dfid)
+
+	def get_full_code(self):
+		code = self.get_device_code() + '\n'
+		code += self.get_kernel_code()
+		return code
+
+	def build(self):
+		self.mod = cp.RawModule(code=self.get_full_code())
+		self.run_func = self.mod.get_function(self.get_kernel_funcid())
+
+	def get_deps(self):
+		return list()
+
+
+
+class NLSQ_LM:
+	
+	@staticmethod
+	def run(data, res, jac, hes, lam):
+		
 

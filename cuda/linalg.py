@@ -44,11 +44,28 @@ void {{funcid}}({{fp_type}}* sred, unsigned int N)
 	return rjh_kernel
 
 class SumEveryNUptoM(CudaFunction):
-	def __init__(self, sred: CudaTensor, n: int, m: int):
-		self.sred = sred
+	def __init__(self, n: int, m: int, dtype: cp.dtype):
+		self.n = n
+		self.m = m
+		self.dtype = dtype
 
-		self.funcid = sum_every_n_upto_m_funcid(n, m, sred.dtype)
-		self.code = sum_every_n_upto_m_code(n, m, sred.dtype)
+		self.funcid = sum_every_n_upto_m_funcid(n, m, dtype)
+		self.code = sum_every_n_upto_m_code(n, m, dtype)
+
+		self.mod = None
+		self.run_func = None
+
+	def run(self, sred):
+		if self.run_func == None:
+			self.build()
+
+		batch_size = 1
+		for s in sred.shape:
+			batch_size *= s
+		Nthreads = 32
+		threads_per_m = np.ceil(self.m / (2*self.n))
+		blockSize = np.ceil(batch_size / Nthreads / threads_per_m)
+		self.run_func((blockSize,),(Nthreads,),(sred, batch_size))
 
 	def get_device_funcid(self):
 		return self.funcid
@@ -73,6 +90,15 @@ void {{funcid}}({{fp_type}}* sred, unsigned int N)
 		dfid = self.get_device_funcid()
 
 		return temp.render(funcid=fid, dfuncid=dfid)
+
+	def get_full_code(self):
+		code = self.get_device_code() + '\n'
+		code += self.get_kernel_code()
+		return code
+
+	def build(self):
+		self.mod = cp.RawModule(code=self.get_full_code())
+		self.run_func = self.mod.get_function(self.get_kernel_funcid())
 
 	def get_deps(self):
 		return list()
@@ -108,13 +134,27 @@ void {{funcid}}({{fp_type}}* sred, unsigned int N)
 	return rjh_kernel
 
 class SumUptoM(CudaFunction):
-	def __init__(self, sred: CudaTensor, m: int):
-		self.sred = sred
+	def __init__(self, m: int, dtype: cp.dtype):
 
 		self.m = m
+		self.dtype = dtype
 
-		self.funcid = sum_upto_m_funcid(m, sred.dtype)
-		self.code = sum_upto_m_code(m, sred.dtype)
+		self.funcid = sum_upto_m_funcid(m, dtype)
+		self.code = sum_upto_m_code(m, dtype)
+
+		self.mod = None
+		self.run_func = None
+
+	def run(self, sred):
+		if self.run_func == None:
+			self.build()
+
+		batch_size = 1
+		for s in sred.shape:
+			batch_size *= s
+		Nthreads = 32
+		blockSize = np.ceil(batch_size / Nthreads / np.floor(self.m / 2))
+		self.run_func((blockSize,),(Nthreads,),(sred, batch_size))
 
 	def get_device_funcid(self):
 		return self.funcid
@@ -140,12 +180,21 @@ void {{funcid}}({{fp_type}}* sred, unsigned int N)
 
 		return temp.render(funcid=fid, dfuncid=dfid)
 
+	def get_full_code(self):
+		code = self.get_device_code() + '\n'
+		code += self.get_kernel_code()
+		return code
+
+	def build(self):
+		self.mod = cp.RawModule(code=self.get_full_code())
+		self.run_func = self.mod.get_function(self.get_kernel_funcid())
+
 	def get_deps(self):
 		deps = []
 		n = 1
 		while (float(self.m) / 2.0*float(n)) >= 1.0:
 			ntpm = math.ceil(self.m / (2*n))
-			deps.append(SumEveryNUptoM(self.sred, n, self.m))
+			deps.append(SumEveryNUptoM(n, self.m, self.dtype))
 			n += 1
 		return deps
 
