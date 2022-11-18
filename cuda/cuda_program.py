@@ -36,6 +36,18 @@ class CudaFunction:
 class CudaTensorChecking:
 
 	@staticmethod
+	def type_funcid(dtype: cp.dtype, func_name: str = None):
+		type_qualifier: str
+		if dtype == cp.float32:
+			type_qualifier = 'f'
+		elif dtype == cp.float64:
+			type_qualifier = 'd'
+		else:
+			raise RuntimeError('does only support fp32 and fp64 in ' + func_name if func_name != None else '')
+
+		return '_' + type_qualifier
+
+	@staticmethod
 	def dim_type_funcid(ndim: int, dtype: cp.dtype, func_name: str = None):
 		type_qualifier: str
 		if dtype == cp.float32:

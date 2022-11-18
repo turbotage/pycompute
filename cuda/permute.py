@@ -63,7 +63,7 @@ int {{funcid}}({{fp_type}}* mat, int offset, unsigned int tid, unsigned int N) {
 
 	funcid = max_diag_abs_funcid(ndim, dtype)
 	abs_fid = 'fabsf' if dtype == cp.float32 else 'fabs'
-	lid_fid = lid_funcid(ndim)
+	lid_fid = lid_funcid()
 	return codestr.render(funcid=funcid, fp_type=type, ndim=ndim, abs_fid=abs_fid, lid_fid=lid_fid)
 
 class MaxDiagAbs(CudaFunction):
@@ -80,13 +80,13 @@ class MaxDiagAbs(CudaFunction):
 		return self.code
 
 	def get_deps(self):
-		return [LID(self.ndim)]
+		return [LID()]
 
 
-def row_interchange_i_funcid(ndim: int, dtype: cp.dtype):
-	return 'row_interchange_i' + ctc.dim_type_funcid(ncol, dtype)
+def row_interchange_i_funcid(dtype: cp.dtype):
+	return 'row_interchange_i' + ctc.type_funcid(dtype)
 
-def row_interchange_i_code(ndim: int, dtype: cp.dtype):
+def row_interchange_i_code(dtype: cp.dtype):
 	codestr = Template(
 """
 __device__
@@ -106,17 +106,17 @@ void {{row_interchange_fid}}({{fp_type}}* mat, int ii, int jj, unsigned int tid,
 
 	type = ctc.check_fp32_or_fp64(CudaTensor(None, dtype), 'row_interchange_i')
 
-	funcid = row_interchange_i_funcid(ncol, dtype)
+	funcid = row_interchange_i_funcid(dtype)
 	lid_fid = lid_funcid()
 
-	return codestr.render(funcid=funcid, fp_type=type, ncol=ncol, lid_fid=lid_fid)
+	return codestr.render(funcid=funcid, fp_type=type, lid_fid=lid_fid)
 
 class RowInterchangeI(CudaFunction):
 	def __init__(self, ndim: int, dtype: cp.dtype):
 		self.ndim = ndim
 		self.dtype = dtype
-		self.funcid = row_interchange_i_funcid(ndim, dtype)
-		self.code = row_interchange_i_code(ndim, dtype)
+		self.funcid = row_interchange_i_funcid(dtype)
+		self.code = row_interchange_i_code(dtype)
 
 	def get_device_funcid(self):
 		return self.funcid
@@ -125,7 +125,7 @@ class RowInterchangeI(CudaFunction):
 		return self.code
 
 	def get_deps(self):
-		return [LID(self.ndim)]
+		return [LID()]
 
 
 def col_interchange_i_funcid(ndim: int, dtype: cp.dtype):
@@ -171,7 +171,7 @@ class ColInterchangeI(CudaFunction):
 		return self.code
 
 	def get_deps(self):
-		return [LID(self.ndim)]
+		return [LID()]
 
 
 def diag_pivot_funcid(ndim: int, dtype: cp.dtype):

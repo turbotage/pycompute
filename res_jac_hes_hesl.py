@@ -4,6 +4,7 @@ import cupy as cp
 import cuda.cuda_program as cuda_cp
 from cuda.cuda_program import CudaTensor, CudaFunction
 from cuda.symbolic import EvalJacHes, ResJacGradHesHesl, NLSQ_LM
+from cuda.solver import GMW81Solver
 
 import time
 import torch
@@ -27,17 +28,19 @@ def from_cu_tensor(t: CudaTensor, rand=False, zeros=False, ones=False):
     return cp.empty(shape=tuple(t.shape), dtype=t.dtype)
 
 pars = CudaTensor([4, Nelem], cp.float32)
-pars_t = from_cu_tensor(pars, True)
+pars_t = from_cu_tensor(pars, rand=True)
 
 consts = CudaTensor([nconst, Nelem], cp.float32)
-consts_t = from_cu_tensor(consts, True)
+consts_t = from_cu_tensor(consts, rand=True)
 
 data = CudaTensor([1, Nelem], cp.float32)
-data_t = from_cu_tensor(data, True)
+data_t = from_cu_tensor(data, rand=True)
 
 lam = CudaTensor([1, Nelem], cp.float32)
 lam_t = from_cu_tensor(lam, ones=True)
 
+step = CudaTensor([4, Nelem], cp.float32)
+step_t = from_cu_tensor(step)
 
 res = CudaTensor([1, Nelem], cp.float32)
 res_t = from_cu_tensor(res)
@@ -58,12 +61,17 @@ expr = 'S0*(f*exp(-b*D_1)+(1-f)*exp(-b*D_2))'
 pars_str = ['S0', 'f', 'D_1', 'D_2']
 consts_str = ['b']
 
-ejh_rjh = ResJacGradHesHesl(expr, pars_str, consts_str, cp.float32)
-
-ejh_code = cuda_cp.code_gen_walking(ejh_rjh, "")
+rjghhl = ResJacGradHesHesl(expr, pars_str, consts_str, cp.float32)
+rjghhl_code = cuda_cp.code_gen_walking(rjghhl, "")
 
 with open("bk_res_jac_grad_hes_hesl.cu", "w") as f:
-    f.write(ejh_code)
+    f.write(rjghhl_code)
+
+gmw81sol = GMW81Solver(nparam, cp.float32)
+gmw81sol_code = cuda_cp.code_gen_walking(gmw81sol, "")
+
+with open("bk_gmw81sol.cu", "w") as f:
+    f.write(gmw81sol_code)
 
 ns = [0, Nelem - 1]
 
@@ -75,8 +83,10 @@ hlsum = None
 gsum = None
 
 for i in range(0,10):
-    ejh_rjh.run(pars_t, consts_t, data_t, lam_t, res_t, jac_t, grad_t, hes_t, hesl_t, int(Nelem))
-    #(hsum, hlsum, gsum) = NLSQ_LM.compact_rjghhl(ndata, grad_t, hes_t, hesl_t)
+    rjghhl.run(pars_t, consts_t, data_t, lam_t, res_t, jac_t, grad_t, hes_t, hesl_t, Nelem)
+    (hsum, hlsum, gsum) = NLSQ_LM.compact_rjghhl(ndata, grad_t, hes_t, hesl_t)
+    gmw81sol.run(hlsum, -gsum, step_t, Nelem)
+
 
 cp.cuda.stream.get_current_stream().synchronize()
 end = time.time()
@@ -94,6 +104,7 @@ if printing:
         gt = gsum[:,ni]
         hlt = hlsum[:,ni]
         ht = hsum[:,ni]
+        st = step_t[:,ni]
 
         print(pt)
         print(ct)
@@ -102,5 +113,6 @@ if printing:
         print(gt)
         print(hlt)
         print(ht)
+        print(st)
 
 
