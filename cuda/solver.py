@@ -7,6 +7,8 @@ from .cuda_program import CudaFunction, CudaTensor
 from .cuda_program import CudaTensorChecking as ctc
 
 from . import permute
+from . import linalg
+
 
 
 # DECOMPOSITIONS #
@@ -67,7 +69,7 @@ def gmw81_code(ndim: int, dtype: cp.dtype):
 	codestr = Template(
 """
 __device__
-void {{funcid}}({{fp_type}}* mat) {
+void {{funcid}}({{fp_type}}* mat, unsigned int tid, unsigned N) {
 	{{fp_type}} m1 = 0.0f;
 	{{fp_type}} m2 = 0.0f;
 	{{fp_type}} beta2 = 0.0f;
@@ -75,7 +77,7 @@ void {{funcid}}({{fp_type}}* mat) {
 	{{fp_type}} arr[{{ndim}}];
 
 	for (int i = 0; i < {{ndim}}; ++i) {
-		temp = {{abs_func}}(mat[i*{{ndim}}+i]);
+		temp = {{abs_func}}(mat[{{lid_fid}}(i,i)*N + tid]);
 		if (m1 < temp) {
 			m1 = temp;
 		}
@@ -87,7 +89,7 @@ void {{funcid}}({{fp_type}}* mat) {
 
 	for (int i = 1; i < {{ndim}}; ++i) {
 		for (int j = 0; j < i; ++j) {
-			temp = {{abs_func}}(mat[i*{{ndim}} + j]);
+			temp = {{abs_func}}(mat[{{lid_fid}}(i,j)*N + tid]);
 			if (m2 < temp) {
 				m2 = temp;
 			}
@@ -103,7 +105,7 @@ void {{funcid}}({{fp_type}}* mat) {
 	}
 
 	for (int i = 0; i < {{ndim}}; ++i) {
-		{{fp_type}} d = {{abs_type}}(mat[i*{{ndim}} + i]);
+		{{fp_type}} d = {{abs_type}}(mat[{{lid_fid}}(i,i)*N + tid]);
 
 		if (d < {{machine_eps}}) {
 			d = {{machine_eps}};
@@ -111,7 +113,7 @@ void {{funcid}}({{fp_type}}* mat) {
 
 		m2 = 0.0f;
 		for (int j = i + 1; j < {{ndim}}; ++j) {
-			temp = {{abs_func}}(mat[j*{{ndim}} + i]);
+			temp = {{abs_func}}(mat[{{lid_fid}}(j,i)*N + tid]);
 			if (m2 < temp) {
 				m2 = temp;
 			}
@@ -123,16 +125,16 @@ void {{funcid}}({{fp_type}}* mat) {
 			d = m2 / beta2;
 		}
 
-		mat[i*{{ndim}} + i] = d;
+		mat[{{lid_fid}}(i,i)*N + tid] = d;
 
 		for (int j = i + 1; j < {{ndim}}; ++j) {
-			arr[j] = mat[j*{{ndim}} + i];
-			mat[j*{{ndim}} + i] /= d;
+			arr[j] = mat[{{lid_fid}}(j,i)*N + tid];
+			mat[{{lid_fid}}(j,i)*N + tid] /= d;
 		}
 
 		for (int j = i + 1; j < {{ndim}}; ++j) {
 			for (int k = j; k < {{ndim}}; ++k) {
-				mat[k*{{ndim}} + j] -= arr[j] * mat[k*{{ndim}} + i];
+				mat[{{lid_fid}}(k,j)*N+tid] -= arr[j] * mat[{{lid_fid}}(k,i)*N+tid];
 			}
 		}
 
@@ -156,20 +158,43 @@ void {{funcid}}({{fp_type}}* mat) {
 
 
 	funcid = gmw81_funcid(ndim, dtype)
+	lid_fid = permute.lid_funcid()
 
-	return codestr.render(funcid=funcid, fp_type=type, ndim=ndim, 
+	return codestr.render(funcid=funcid, fp_type=type, ndim=ndim, lid_fid=lid_fid,
 		abs_func=abs_func, sqrt_func=sqrt_func, machine_eps=machine_eps)
 
 class GMW81(CudaFunction):
-	def __init__(self, mat: CudaTensor):
-		ctc.check_square_mat(mat, 'gmw81')
-		self.mat = mat
+	def __init__(self, ndim: int, dtype: cp.dtype):
+		self.funcid = gmw81_funcid(ndim, dtype)
+		self.code = gmw81_code(ndim, dtype)
+		self.type_str = ctc.type_to_typestr(dtype)
 
-	def get_funcid(self):
-		return gmw81_funcid(self.mat.shape[1], self.mat.dtype)
+	def get_device_funcid(self):
+		return self.funcid
 
-	def get_code(self):
-		return gmw81_code(self.mat.shape[1], self.mat.dtype)
+	def get_kernel_funcid(self):
+		funcid = self.funcid
+		return 'k_' + funcid
+
+	def get_device_code(self):
+		return self.code
+
+	def get_kernel_code(self):
+		temp = Template(
+"""
+extern \"C\" __global__
+void {{funcid}}({{fp_type}}* mat, unsigned int N) 
+{
+	unsigned int tid = blockDim.x * blockIdx.x + threadIdx.x;
+	if (tid < N) {
+		{{dfuncid}}(mat, tid, N);
+	}
+}
+""")
+		fid = self.get_kernel_funcid()
+		dfid = self.get_device_funcid()
+
+		return temp.render(funcid=fid, dfuncid=dfid, fp_type=self.type_str)
 
 	def get_deps(self):
 		return list()

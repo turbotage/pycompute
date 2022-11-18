@@ -161,7 +161,7 @@ def gen_deps_dict(func: CudaFunction, deps: list[CudaFunction], keys: set[str]):
 	for f in func.get_deps():
 		gen_deps_dict(f, deps, keys)
 
-	fid = func.get_funcid()
+	fid = func.get_device_funcid()
 	if fid not in keys:
 		deps.append(func)
 		keys.add(fid)
