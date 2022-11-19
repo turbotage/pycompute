@@ -15,10 +15,7 @@ def lid_code():
 	codestr = Template(
 """
 __device__
-unsigned int lid(int i, int j) {
-	if (j > i) {
-		return j*(j+1)/2 + i;
-	}
+int lid(int i, int j) {
 	return i*(i+1) + j;
 }
 """)
@@ -47,11 +44,12 @@ def max_diag_abs_code(ndim: int, dtype: cp.dtype):
 	codestr = Template(
 """
 __device__
-int {{funcid}}({{fp_type}}* mat, int offset, unsigned int tid, unsigned int N) {
+int {{funcid}}(const {{fp_type}}* mat, int offset) {
 	{{fp_type}} max_abs = -1.0f;
 	int max_index = 0;
+	#pragma unroll
 	for (int i = offset; i < {{ndim}}; ++i) {
-		if ({{abs_fid}}(mat[{{lid_fid}}(i,i)*N+tid]) > max_abs) {
+		if ({{abs_fid}}(mat[{{lid_fid}}(i,i)]) > max_abs) {
 			max_index = i;
 		}
 	}
@@ -90,11 +88,12 @@ def row_interchange_i_code(dtype: cp.dtype):
 	codestr = Template(
 """
 __device__
-void {{row_interchange_fid}}({{fp_type}}* mat, int ii, int jj, unsigned int tid, unsigned int N) {
-	unsigned int ncopy = max(ii,jj);
+void {{funcid}}({{fp_type}}* mat, int ii, int jj) {
+	int ncopy = max(ii,jj);
+	#pragma unroll
 	for (int k = 0; k < ncopy; ++k) {
-		unsinged int ikn = {{lid_fid}}(ii,k)*N + tid;
-		unsigned int jkn = {{lid_fid}}(jj,k)*N + tid;
+		int ikn = {{lid_fid}}(ii,k);
+		int jkn = {{lid_fid}}(jj,k);
 
 		{{fp_type}} temp;
 		temp = mat[ikn];
@@ -135,11 +134,12 @@ def col_interchange_i_code(ndim: int, dtype: cp.dtype):
 	codestr = Template(
 """
 __device__
-void {{col_interchange_fid}}({{fp_type}}* mat, int ii, int jj, unsigned int tid, unsigned int N) {
-	unsigned int ncopy = max({{ndim}} - ii, {{ndim}} - jj);
+void {{funcid}}({{fp_type}}* mat, int ii, int jj) {
+	int ncopy = max({{ndim}} - ii, {{ndim}} - jj);
+	#pragma unroll
 	for (int k = 0; k < ncopy; ++k) {
-		unsinged int kin = {{lid_fid}}(k,ii)*N + tid;
-		unsigned int kjn = {{lid_fid}}(k,jj)*N + tid;
+		int kin = {{lid_fid}}(k,ii);
+		int kjn = {{lid_fid}}(k,jj);
 
 		{{fp_type}} temp;
 		temp = mat[kin];
@@ -181,14 +181,16 @@ def diag_pivot_code(ndim: int, dtype: cp.dtype):
 	codestr = Template(
 """
 __device__
-void {{diag_pivot_fid}}({{fp_type}}* mat, int* perm, unsigned int tid, unsigned int N) {
+void {{funcid}}({{fp_type}}* mat, int* perm) {
+	#pragma unroll
 	for (int i = 0; i < {{ndim}}; ++i) {
 		perm[i] = i;
 	}
+	#pragma unroll
 	for (int i = 0; i < {{ndim}}; ++i) {
-		int max_abs = {{max_diag_abs_fid}}(mat, i, tid, N);
-		{{row_interchange_fid}}(mat, i, max_abs, tid, N);
-		{{col_interchange_fid}}(mat, i, max_abs, tid, N);
+		int max_abs = {{max_diag_abs_fid}}(mat, i);
+		{{row_interchange_fid}}(mat, i, max_abs);
+		{{col_interchange_fid}}(mat, i, max_abs);
 		int temp = perm[i];
 		perm[i] = perm[max_abs];
 		perm[max_abs] = temp;
@@ -200,8 +202,8 @@ void {{diag_pivot_fid}}({{fp_type}}* mat, int* perm, unsigned int tid, unsigned 
 
 	funcid = diag_pivot_funcid(ndim, dtype)
 	max_diag_abs_fid = max_diag_abs_funcid(ndim, dtype)
-	row_fid = row_interchange_i_funcid(ndim, dtype)
-	col_fid = col_interchange_i_funcid(ndim, ndim, dtype)
+	row_fid = row_interchange_i_funcid(dtype)
+	col_fid = col_interchange_i_funcid(ndim, dtype)
 
 	return codestr.render(funcid=funcid, fp_type=type, ndim=ndim, 
 		max_diag_abs_fid=max_diag_abs_fid, row_interchange_fid=row_fid, col_interchange_fid=col_fid)
@@ -210,8 +212,8 @@ class DiagPivot(CudaFunction):
 	def __init__(self, ndim: int, dtype: cp.dtype):
 		self.ndim = ndim
 		self.dtype = dtype
-		self.funcid = col_interchange_i_funcid(ndim, dtype)
-		self.code = col_interchange_i_code(ndim, dtype)
+		self.funcid = diag_pivot_funcid(ndim, dtype)
+		self.code = diag_pivot_code(ndim, dtype)
 
 	def get_device_funcid(self):
 		return self.funcid
@@ -231,9 +233,10 @@ def permute_vec_code(ndim: int, dtype: cp.dtype):
 	codestr = Template(
 """
 __device__
-void {{permute_vec_fid}}({{fp_type}}* vec, const int* perm, {{fp_type}}* ovec, unsigned int tid, unsigned int N) {
+void {{funcid}}(const {{fp_type}}* vec, const int* perm, {{fp_type}}* ovec) {
+	#pragma unroll
 	for (int i = 0; i < {{ndim}}; ++i) {
-		ovec[i*N + tid] = vec[perm[i]*N + tid];
+		ovec[i] = vec[perm[i]];
 	}
 }
 """)
@@ -268,9 +271,10 @@ def inv_permute_vec_code(ndim: int, dtype: cp.dtype):
 	codestr = Template(
 """
 __device__
-void {{inv_permute_vec_fid}}({{fp_type}}* vec, const int* perm, {{fp_type}}* ovec, unsigned int tid, unsigned int N) {
+void {{funcid}}(const {{fp_type}}* vec, const int* perm, {{fp_type}}* ovec) {
+	#pragma unroll
 	for (int i = 0; i < {{ndim}}; ++i) {
-		ovec[perm[i]*N + tid] = vec[i*N + tid];
+		ovec[perm[i]] = vec[i];
 	}
 }
 """)

@@ -39,7 +39,7 @@ data_t = from_cu_tensor(data, rand=True)
 lam = CudaTensor([1, Nelem], cp.float32)
 lam_t = from_cu_tensor(lam, ones=True)
 
-step = CudaTensor([4, Nelem], cp.float32)
+step = CudaTensor([4, batch_size], cp.float32)
 step_t = from_cu_tensor(step)
 
 res = CudaTensor([1, Nelem], cp.float32)
@@ -65,15 +65,14 @@ rjghhl = ResJacGradHesHesl(expr, pars_str, consts_str, cp.float32)
 rjghhl_code = cuda_cp.code_gen_walking(rjghhl, "")
 
 with open("bk_res_jac_grad_hes_hesl.cu", "w") as f:
-    f.write(rjghhl_code)
+    f.write(rjghhl.build())
 
 gmw81sol = GMW81Solver(nparam, cp.float32)
 gmw81sol_code = cuda_cp.code_gen_walking(gmw81sol, "")
 
 with open("bk_gmw81sol.cu", "w") as f:
-    f.write(gmw81sol_code)
+    f.write(gmw81sol.build())
 
-ns = [0, Nelem - 1]
 
 print('Before kernel')
 start = time.time()
@@ -85,7 +84,7 @@ gsum = None
 for i in range(0,10):
     rjghhl.run(pars_t, consts_t, data_t, lam_t, res_t, jac_t, grad_t, hes_t, hesl_t, Nelem)
     (hsum, hlsum, gsum) = NLSQ_LM.compact_rjghhl(ndata, grad_t, hes_t, hesl_t)
-    gmw81sol.run(hlsum, -gsum, step_t, Nelem)
+    gmw81sol.run(hlsum, -gsum, step_t, batch_size)
 
 
 cp.cuda.stream.get_current_stream().synchronize()
@@ -93,7 +92,8 @@ end = time.time()
 print('After kernel')
 print('It took: ' + str(end - start) + ' s')
 
-printing = False
+ns = [0, batch_size - 1]
+printing = True
 if printing:
     for ni in ns:
         print('Show Iter: ')

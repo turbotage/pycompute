@@ -10,6 +10,7 @@ from symengine import sympify
 from sym import util
 
 from . import linalg
+from . import cuda_program as cudap
 from .cuda_program import CudaFunction, CudaTensor
 from .cuda_program import CudaTensorChecking as ctc
 
@@ -24,7 +25,7 @@ def eval_jac_hes_code(expr: str, pars_str: list[str], consts_str: list[str], dty
 """
 __device__
 void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, {{fp_type}}* eval, 
-	{{fp_type}}* jac, {{fp_type}}* hes, unsigned int tid, unsigned int N) 
+	{{fp_type}}* jac, {{fp_type}}* hes, int tid, int N) 
 {
 	{{fp_type}} pars[{{nparam}}];
 	for (int i = 0; i < {{nparam}}; ++i) {
@@ -153,9 +154,9 @@ class EvalJacHes(CudaFunction):
 """
 extern \"C\" __global__
 void {{funcid}}(const {{fp_type}}* pars, const {{fp_type}}* consts,
-	{{fp_type}}* eval, {{fp_type}}* jac, {{fp_type}}* hes, unsigned int N) 
+	{{fp_type}}* eval, {{fp_type}}* jac, {{fp_type}}* hes, int N) 
 {
-	unsigned int tid = blockDim.x * blockIdx.x + threadIdx.x;
+	int tid = blockDim.x * blockIdx.x + threadIdx.x;
 	if (tid < N) {
 		{{dfuncid}}(pars, consts, eval, jac, hes, tid, N);
 	}
@@ -172,8 +173,10 @@ void {{funcid}}(const {{fp_type}}* pars, const {{fp_type}}* consts,
 		return code
 
 	def build(self):
-		self.mod = cp.RawModule(code=self.get_full_code())
+		cc = cudap.code_gen_walking(self, "")
+		self.mod = cp.RawModule(code=cc)
 		self.run_func = self.mod.get_function(self.get_kernel_funcid())
+		return cc
 
 	def get_deps(self):
 		return list()
@@ -190,7 +193,7 @@ def res_jac_grad_hes_hesl_code(expr: str, pars_str: list[str], consts_str: list[
 """
 __device__
 void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp_type}}* data, const {{fp_type}}* lam,
-	{{fp_type}}* res, {{fp_type}}* jac, {{fp_type}}* grad, {{fp_type}}* hes, {{fp_type}}* hesl, unsigned int tid, unsigned int N) 
+	{{fp_type}}* res, {{fp_type}}* jac, {{fp_type}}* grad, {{fp_type}}* hes, {{fp_type}}* hesl, int tid, int N) 
 {
 	{{fp_type}} pars[{{nparam}}];
 	#pragma unroll
@@ -339,9 +342,9 @@ class ResJacGradHesHesl(CudaFunction):
 """
 extern \"C\" __global__
 void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp_type}}* data, const {{fp_type}}* lam,
-	{{fp_type}}* res, {{fp_type}}* jac, {{fp_type}}* grad, {{fp_type}}* hes, {{fp_type}}* hesl, unsigned int N) 
+	{{fp_type}}* res, {{fp_type}}* jac, {{fp_type}}* grad, {{fp_type}}* hes, {{fp_type}}* hesl, int N) 
 {
-	unsigned int tid = blockDim.x * blockIdx.x + threadIdx.x;
+	int tid = blockDim.x * blockIdx.x + threadIdx.x;
 	if (tid < N) {
 		{{dfuncid}}(params, consts, data, lam, res, jac, grad, hes, hesl, tid, N);
 	}
@@ -358,8 +361,10 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp
 		return code
 
 	def build(self):
-		self.mod = cp.RawModule(code=self.get_full_code())
+		cc = cudap.code_gen_walking(self, "")
+		self.mod = cp.RawModule(code=cc)
 		self.run_func = self.mod.get_function(self.get_kernel_funcid())
+		return cc
 
 	def get_deps(self):
 		return list()
@@ -374,7 +379,7 @@ def res_hes_code(nparam: int, dtype: cp.dtype):
 	rjh_temp = Template(
 """
 __device__
-void {{funcid}}(const {{fp_type}}* data, {{fp_type}}* eval, {{fp_type}}* hes, unsigned int tid, unsigned int N) 
+void {{funcid}}(const {{fp_type}}* data, {{fp_type}}* eval, {{fp_type}}* hes, int tid, int N) 
 {
 	eval[tid] -= data[tid];
 
@@ -423,9 +428,9 @@ class ResHes(CudaFunction):
 		temp = Template(
 """
 extern \"C\" __global__
-void {{funcid}}(const {{fp_type}}* data, {{fp_type}}* eval, {{fp_type}}* hes, unsigned int N) 
+void {{funcid}}(const {{fp_type}}* data, {{fp_type}}* eval, {{fp_type}}* hes, int N) 
 {
-	unsigned int tid = blockDim.x * blockIdx.x + threadIdx.x;
+	int tid = blockDim.x * blockIdx.x + threadIdx.x;
 	if (tid < N) {
 		{{dfuncid}}(data, eval, hes, tid, N);
 	}
@@ -442,8 +447,10 @@ void {{funcid}}(const {{fp_type}}* data, {{fp_type}}* eval, {{fp_type}}* hes, un
 		return code
 
 	def build(self):
-		self.mod = cp.RawModule(code=self.get_full_code())
+		cc = cudap.code_gen_walking(self, "")
+		self.mod = cp.RawModule(code=cc)
 		self.run_func = self.mod.get_function(self.get_kernel_funcid())
+		return cc
 
 	def get_deps(self):
 		return list()

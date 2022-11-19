@@ -5,6 +5,7 @@ import cupy as cp
 
 import math
 
+from . import cuda_program as cudap
 from .cuda_program import CudaFunction, CudaTensor
 from .cuda_program import CudaTensorChecking as ctc
 
@@ -20,7 +21,7 @@ def gmw81_code(ndim: int, dtype: cp.dtype):
 	codestr = Template(
 """
 __device__
-void {{funcid}}({{fp_type}}* mat, unsigned int tid, unsigned N) {
+void {{funcid}}({{fp_type}}* mat) {
 	{{fp_type}} m1 = 0.0f;
 	{{fp_type}} m2 = 0.0f;
 	{{fp_type}} beta2 = 0.0f;
@@ -28,7 +29,7 @@ void {{funcid}}({{fp_type}}* mat, unsigned int tid, unsigned N) {
 	{{fp_type}} arr[{{ndim}}];
 
 	for (int i = 0; i < {{ndim}}; ++i) {
-		temp = {{abs_func}}(mat[{{lid_fid}}(i,i)*N + tid]);
+		temp = {{abs_func}}(mat[{{lid_fid}}(i,i)]);
 		if (m1 < temp) {
 			m1 = temp;
 		}
@@ -40,7 +41,7 @@ void {{funcid}}({{fp_type}}* mat, unsigned int tid, unsigned N) {
 
 	for (int i = 1; i < {{ndim}}; ++i) {
 		for (int j = 0; j < i; ++j) {
-			temp = {{abs_func}}(mat[{{lid_fid}}(i,j)*N + tid]);
+			temp = {{abs_func}}(mat[{{lid_fid}}(i,j)]);
 			if (m2 < temp) {
 				m2 = temp;
 			}
@@ -56,7 +57,7 @@ void {{funcid}}({{fp_type}}* mat, unsigned int tid, unsigned N) {
 	}
 
 	for (int i = 0; i < {{ndim}}; ++i) {
-		{{fp_type}} d = {{abs_type}}(mat[{{lid_fid}}(i,i)*N + tid]);
+		{{fp_type}} d = {{abs_type}}(mat[{{lid_fid}}(i,i)]);
 
 		if (d < {{machine_eps}}) {
 			d = {{machine_eps}};
@@ -64,7 +65,7 @@ void {{funcid}}({{fp_type}}* mat, unsigned int tid, unsigned N) {
 
 		m2 = 0.0f;
 		for (int j = i + 1; j < {{ndim}}; ++j) {
-			temp = {{abs_func}}(mat[{{lid_fid}}(j,i)*N + tid]);
+			temp = {{abs_func}}(mat[{{lid_fid}}(j,i)]);
 			if (m2 < temp) {
 				m2 = temp;
 			}
@@ -76,16 +77,16 @@ void {{funcid}}({{fp_type}}* mat, unsigned int tid, unsigned N) {
 			d = m2 / beta2;
 		}
 
-		mat[{{lid_fid}}(i,i)*N + tid] = d;
+		mat[{{lid_fid}}(i,i)] = d;
 
 		for (int j = i + 1; j < {{ndim}}; ++j) {
-			arr[j] = mat[{{lid_fid}}(j,i)*N + tid];
-			mat[{{lid_fid}}(j,i)*N + tid] /= d;
+			arr[j] = mat[{{lid_fid}}(j,i)];
+			mat[{{lid_fid}}(j,i)] /= d;
 		}
 
 		for (int j = i + 1; j < {{ndim}}; ++j) {
 			for (int k = j; k < {{ndim}}; ++k) {
-				mat[{{lid_fid}}(k,j)*N+tid] -= arr[j] * mat[{{lid_fid}}(k,i)*N+tid];
+				mat[{{lid_fid}}(k,j)] -= arr[j] * mat[{{lid_fid}}(k,i)];
 			}
 		}
 
@@ -134,18 +135,32 @@ class GMW81(CudaFunction):
 		temp = Template(
 """
 extern \"C\" __global__
-void {{funcid}}({{fp_type}}* mat, unsigned int N) 
+void {{funcid}}({{fp_type}}* mat, int N) 
 {
-	unsigned int tid = blockDim.x * blockIdx.x + threadIdx.x;
+	int tid = blockDim.x * blockIdx.x + threadIdx.x;
 	if (tid < N) {
-		{{dfuncid}}(mat, tid, N);
+		{{fp_type}} mat_copy[{{nmat}}];
+		#pragma unroll
+		for (int i = 0; i < {{nmat}}; ++i) {
+			mat_copy[i] = mat[i*N+tid];
+		}
+
+		{{dfuncid}}(mat_copy);
+
+		#pragma unroll
+		for (int i = 0; i < {{nmat}}; ++i) {
+			mat[i*N+tid] = mat_copy[i];
+		}
 	}
 }
 """)
 		fid = self.get_kernel_funcid()
 		dfid = self.get_device_funcid()
 
-		return temp.render(funcid=fid, dfuncid=dfid, fp_type=self.type_str)
+		ndim=self.ndim
+		nmat=round(ndim*(ndim+1)/2)
+
+		return temp.render(funcid=fid, dfuncid=dfid, fp_type=self.type_str,ndim=ndim,nmat=nmat)
 
 	def get_deps(self):
 		return [permute.LID()]
@@ -159,14 +174,13 @@ def forward_subs_unit_diaged_code(ndim: int, dtype: cp.dtype):
 	codestr = Template(
 """
 __device__
-void {{funcid}}(const {{fp_type}}* mat, {{fp_type}}* rhs, {{fp_type}}* sol, unsigned int tid, unsigned int N) {
+void {{funcid}}(const {{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol) {
 	for (int i = 0; i < {{ndim}}; ++i) {
-		unsigned int i_nt = i*N+tid;
-		sol[i_nt] = rhs[i_nt];
+		sol[i] = rhs[i];
 		for (int j = 0; j < i; ++j) {
-			sol[i_nt] -= mat[{{lid_fid}}(i,j)*N+tid] * mat[{{lid_fid}}(j,i)*N+tid] * sol[j*N+tid];
+			sol[i] -= mat[{{lid_fid}}(i,j)] * mat[{{lid_fid}}(j,i)] * sol[j];
 		}
-		sol[i_nt] /= mat[{{lid_fid}}(i,i)*N+tid];
+		sol[i] /= mat[{{lid_fid}}(i,i)];
 	}
 }
 """)
@@ -174,11 +188,14 @@ void {{funcid}}(const {{fp_type}}* mat, {{fp_type}}* rhs, {{fp_type}}* sol, unsi
 	type: str = ctc.check_fp32_or_fp64(CudaTensor(None, dtype), 'forward_subs_unit_diaged')
 
 	funcid = forward_subs_unit_diaged_funcid(ndim, dtype)
+	lid_fid = permute.lid_funcid()
 
-	return codestr.render(funcid=funcid, fp_type=type, ndim=ndim)
+	return codestr.render(funcid=funcid, fp_type=type, ndim=ndim, lid_fid=lid_fid)
 
 class ForwardSubsUnitDiaged(CudaFunction):
 	def __init__(self, ndim: int, dtype: cp.dtype):
+		self.ndim = ndim
+		self.dtype = dtype
 		self.funcid = forward_subs_unit_diaged_funcid(ndim, dtype)
 		self.code = forward_subs_unit_diaged_code(ndim, dtype)
 		self.type_str = ctc.type_to_typestr(dtype)
@@ -197,18 +214,40 @@ class ForwardSubsUnitDiaged(CudaFunction):
 		temp = Template(
 """
 extern \"C\" __global__
-void {{funcid}}(const {{fp_type}}* mat, {{fp_type}}* rhs, {{fp_type}}* sol, unsigned int N) 
+void {{funcid}}(const {{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol, int N) 
 {
-	unsigned int tid = blockDim.x * blockIdx.x + threadIdx.x;
+	int tid = blockDim.x * blockIdx.x + threadIdx.x;
 	if (tid < N) {
-		{{dfuncid}}(mat, rhs, sol, tid, N);
+		{{fp_type}} mat_copy[{{nmat}}];
+		{{fp_type}} rhs_copy[{{ndim}}];
+		{{fp_type}} sol_copy[{{ndim}}];
+
+		#pragma unroll
+		for (int i = 0; i < {{ndim}}; ++i) {
+			rhs_copy[i] = rhs[i*N+tid];
+			sol_copy[i] = sol[i*N+tid];
+		}
+		#pragma unroll
+		for (int i = 0; i < {{nmat}}; ++i) {
+			mat_copy[i] = mat[i*N+tid];
+		}
+
+		{{dfuncid}}(mat_copy, rhs_copy, sol_copy);
+
+		#pragma unroll
+		for (int i = 0; i < {{ndim}}; ++i) {
+			sol[i*N+tid] = sol_copy[i];
+		}
 	}
 }
 """)
 		fid = self.get_kernel_funcid()
 		dfid = self.get_device_funcid()
 
-		return temp.render(funcid=fid, dfuncid=dfid, fp_type=self.type_str)
+		ndim=self.ndim
+		nmat = round(ndim*(ndim+1)/2)
+
+		return temp.render(funcid=fid, dfuncid=dfid, fp_type=self.type_str, ndim=ndim, nmat=nmat)
 
 	def get_deps(self):
 		return [permute.LID()]
@@ -221,12 +260,12 @@ def backward_subs_unit_t_code(ndim: int, dtype: cp.dtype):
 	codestr = Template(
 """
 __device__
-void {{funcid}}({{fp_type}}* mat, {{fp_type}}* rhs, {{fp_type}}* sol, unsigned int tid, unsigned int N) {
+void {{funcid}}({{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol) {
+	#pragma unroll
 	for (int i = {{ndim}} - 1; i >= 0; --i) {
-		unsigned int i_nt = i*N+tid;
-		sol[i_nt] = rhs[i_nt];
+		sol[i] = rhs[i];
 		for (int j = i + 1; j < {{ndim}}; ++j) {
-			sol[i_nt] -= mat[{{lid_fid}}(j,i)*N+tid] * sol[j*N+tid];
+			sol[i] -= mat[{{lid_fid}}(j,i)] * sol[j];
 		}
 	}
 }
@@ -235,11 +274,14 @@ void {{funcid}}({{fp_type}}* mat, {{fp_type}}* rhs, {{fp_type}}* sol, unsigned i
 	type: str = ctc.check_fp32_or_fp64(CudaTensor(None, dtype), 'backward_subs_unit_t')
 
 	funcid = backward_subs_unit_t_funcid(ndim, dtype)
+	lid_fid = permute.lid_funcid()
 
-	return codestr.render(funcid=funcid, fp_type=type, ndim=ndim)
+	return codestr.render(funcid=funcid, fp_type=type, ndim=ndim, lid_fid=lid_fid)
 
 class BackwardSubsUnitT(CudaFunction):
 	def __init__(self, ndim: int, dtype: cp.dtype):
+		self.ndim = ndim
+		self.dtype = dtype
 		self.funcid = backward_subs_unit_t_funcid(ndim, dtype)
 		self.code = backward_subs_unit_t_code(ndim, dtype)
 		self.type_str = ctc.type_to_typestr(dtype)
@@ -258,18 +300,39 @@ class BackwardSubsUnitT(CudaFunction):
 		temp = Template(
 """
 extern \"C\" __global__
-void {{funcid}}(const {{fp_type}}* mat, {{fp_type}}* rhs, {{fp_type}}* sol, unsigned int N) 
+void {{funcid}}(const {{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol, int N) 
 {
-	unsigned int tid = blockDim.x * blockIdx.x + threadIdx.x;
+	int tid = blockDim.x * blockIdx.x + threadIdx.x;
 	if (tid < N) {
-		{{dfuncid}}(mat, rhs, sol, tid, N);
+		{{fp_type}} mat_copy[{{nmat}}];
+		{{fp_type}} rhs_copy[{{ndim}}];
+		{{fp_type}} sol_copy[{{ndim}}];
+
+		#pragma unroll
+		for (int i = 0; i < {{ndim}}; ++i) {
+			rhs_copy[i] = rhs[i*N+tid];
+			sol_copy[i] = sol[i*N+tid];
+		}
+		#pragma unroll
+		for (int i = 0; i < {{nmat}}; ++i) {
+			mat_rhs[i] = mat[i*N+tid];
+		}
+
+		{{dfuncid}}(mat_copy, rhs_copy, sol_copy);
+
+		#pragma unroll
+		for (int i = 0; i < {{ndim}}; ++i) {
+			sol[i*N+tid] = sol_copy[i];
+		}
 	}
 }
 """)
 		fid = self.get_kernel_funcid()
 		dfid = self.get_device_funcid()
+		ndim = self.ndim
+		nmat = round(self.ndim*(self.ndim+1)/2)
 
-		return temp.render(funcid=fid, dfuncid=dfid, fp_type=self.type_str)
+		return temp.render(funcid=fid, dfuncid=dfid, fp_type=self.type_str, ndim=ndim, nmat=nmat)
 
 	def get_deps(self):
 		return [permute.LID()]
@@ -284,10 +347,10 @@ def ldl_solve_code(ndim: int, dtype: cp.dtype):
 	codestr = Template(
 """
 __device__
-void {{funcid}}({{fp_type}}* mat, {{fp_type}}* rhs, {{fp_type}}* sol, unsigned int tid, unsigned int N) {
+void {{funcid}}({{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol) {
 	{{fp_type}} arr[{{ndim}}];
-	{{forward_funcid}}(mat, rhs, arr, tid, N);
-	{{backward_funcid}}(mat, arr, sol, tid, N);
+	{{forward_funcid}}(mat, rhs, arr);
+	{{backward_funcid}}(mat, arr, sol);
 }
 """)
 
@@ -323,11 +386,30 @@ class LDLSolve(CudaFunction):
 		temp = Template(
 """
 extern \"C\" __global__
-void {{funcid}}(const {{fp_type}}* mat, {{fp_type}}* rhs, {{fp_type}}* sol, unsigned int N) 
+void {{funcid}}(const {{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol, int N) 
 {
-	unsigned int tid = blockDim.x * blockIdx.x + threadIdx.x;
+	int tid = blockDim.x * blockIdx.x + threadIdx.x;
 	if (tid < N) {
-		{{dfuncid}}(mat, rhs, sol, tid, N);
+		{{fp_type}} mat_copy[{{nmat}}];
+		{{fp_type}} rhs_copy[{{ndim}}];
+		{{fp_type}} sol_copy[{{ndim}}];
+
+		#pragma unroll
+		for (int i = 0; i < {{ndim}}; ++i) {
+			rhs_copy[i] = rhs[i*N+tid];
+			sol_copy[i] = sol[i*N+tid];
+		}
+		#pragma unroll
+		for (int i = 0; i < {{nmat}}; ++i) {
+			mat_rhs[i] = mat[i*N+tid];
+		}
+
+		{{dfuncid}}(mat, rhs, sol);
+
+		#pragma unroll
+		for (int i = 0; i < {{ndim}}; ++i) {
+			sol[i*N+tid] = sol_copy[i];
+		}
 	}
 }
 """)
@@ -350,15 +432,16 @@ def gmw81_solver_code(ndim: int, dtype: cp.dtype):
 	codestr = Template(
 """
 __device__
-void {{funcid}}({{fp_type}}* mat, {{fp_type}}* rhs, {{fp_type}}* sol, unsigned int tid, unsigned int N) {
-	int perm[{{ndim}}];
-	{{fp_type}} arr1[{{ndim}}];
-	{{fp_type}} arr2[{{ndim}}];
-	{{diag_pivot_funcid}}(mat, perm, tid, N);
-	{{gmw81_funcid}}(mat, tid, N);
-	{{permute_vec_funcid}}(rhs, perm, arr1, tid, N);
-	{{ldl_solve_funcid}}(mat, arr1, arr2, tid, N);
-	{{inv_permute_vec_funcid}}(arr2, perm, sol, tid, N);
+void {{funcid}}({{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol) {
+	//int perm[{{ndim}}];
+	//{{fp_type}} arr1[{{ndim}}];
+	//{{fp_type}} arr2[{{ndim}}];
+	//{{diag_pivot_funcid}}(mat, perm);
+	{{gmw81_funcid}}(mat);
+	//{{permute_vec_funcid}}(rhs, perm, arr1);
+	//{{ldl_solve_funcid}}(mat, arr1, arr2);
+	{{ldl_solve_funcid}}(mat,rhs,sol);
+	//{{inv_permute_vec_funcid}}(arr2, perm, sol);
 }
 """)
 
@@ -409,18 +492,41 @@ class GMW81Solver(CudaFunction):
 		temp = Template(
 """
 extern \"C\" __global__
-void {{funcid}}(const {{fp_type}}* mat, {{fp_type}}* rhs, {{fp_type}}* sol, unsigned int N) 
+void {{funcid}}({{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol, int N) 
 {
-	unsigned int tid = blockDim.x * blockIdx.x + threadIdx.x;
+	int tid = blockDim.x * blockIdx.x + threadIdx.x;
 	if (tid < N) {
-		{{dfuncid}}(mat, rhs, sol, tid, N);
+
+		{{fp_type}} mat_copy[{{nmat}}];
+		{{fp_type}} rhs_copy[{{ndim}}];
+		{{fp_type}} sol_copy[{{ndim}}];
+
+		#pragma unroll
+		for (int i = 0; i < {{ndim}}; ++i) {
+			rhs_copy[i] = rhs[i*N+tid];
+			sol_copy[i] = sol[i*N+tid];
+		}
+		#pragma unroll
+		for (int i = 0; i < {{nmat}}; ++i) {
+			mat_copy[i] = mat[i*N+tid];
+		}
+
+		{{dfuncid}}(mat_copy, rhs_copy, sol_copy);
+
+		#pragma unroll
+		for (int i = 0; i < {{ndim}}; ++i) {
+			sol[i*N+tid] = sol_copy[i];
+		}
 	}
 }
 """)
 		fid = self.get_kernel_funcid()
 		dfid = self.get_device_funcid()
 
-		return temp.render(funcid=fid, dfuncid=dfid, fp_type=self.type_str)
+		ndim=self.ndim
+		nmat=round(ndim*(ndim+1)/2)
+
+		return temp.render(funcid=fid, dfuncid=dfid, fp_type=self.type_str, ndim=ndim, nmat=nmat)
 
 	def get_full_code(self):
 		code = self.get_device_code() + '\n'
@@ -428,8 +534,18 @@ void {{funcid}}(const {{fp_type}}* mat, {{fp_type}}* rhs, {{fp_type}}* sol, unsi
 		return code
 
 	def build(self):
-		self.mod = cp.RawModule(code=self.get_full_code())
+		cc = cudap.code_gen_walking(self, "")
+		try:
+			self.mod = cp.RawModule(code=cc)
+			self.run_func = self.mod.get_function(self.get_kernel_funcid())
+		except:
+			with open("on_compile_fail.cu", "w") as f:
+				f.write(cc)
+			raise
+		return cc
+
 		self.run_func = self.mod.get_function(self.get_kernel_funcid())
+		return cc
 
 	def get_deps(self):
 		return [permute.DiagPivot(self.ndim, self.dtype), GMW81(self.ndim, self.dtype),

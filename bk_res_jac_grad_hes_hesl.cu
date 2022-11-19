@@ -1,7 +1,7 @@
 
 __device__
 void res_jac_grad_hes_hesl_4_1_f_f7def86f0a03(const float* params, const float* consts, const float* data, const float* lam,
-	float* res, float* jac, float* grad, float* hes, float* hesl, unsigned int tid, unsigned int N) 
+	float* res, float* jac, float* grad, float* hes, float* hesl, int tid, int N) 
 {
 	float pars[4];
 	#pragma unroll
@@ -63,9 +63,9 @@ void res_jac_grad_hes_hesl_4_1_f_f7def86f0a03(const float* params, const float* 
 
 extern "C" __global__
 void k_res_jac_grad_hes_hesl_4_1_f_f7def86f0a03(const float* params, const float* consts, const float* data, const float* lam,
-	float* res, float* jac, float* grad, float* hes, float* hesl, unsigned int N) 
+	float* res, float* jac, float* grad, float* hes, float* hesl, int N) 
 {
-	unsigned int tid = blockDim.x * blockIdx.x + threadIdx.x;
+	int tid = blockDim.x * blockIdx.x + threadIdx.x;
 	if (tid < N) {
 		res_jac_grad_hes_hesl_4_1_f_f7def86f0a03(params, consts, data, lam, res, jac, grad, hes, hesl, tid, N);
 	}
