@@ -13,7 +13,7 @@ ndata = 21
 nparam = 4
 nconst = 1
 
-batch_size = 1000000
+batch_size = 10000
 
 Nelem = batch_size * ndata
 
@@ -38,6 +38,7 @@ data_t = from_cu_tensor(data, rand=True)
 
 lam = CudaTensor([1, Nelem], cp.float32)
 lam_t = from_cu_tensor(lam, ones=True)
+lam_t = 5*lam_t
 
 step = CudaTensor([4, batch_size], cp.float32)
 step_t = from_cu_tensor(step)
@@ -81,19 +82,31 @@ hsum = None
 hlsum = None
 gsum = None
 
-for i in range(0,10):
+for i in range(0,1):
     rjghhl.run(pars_t, consts_t, data_t, lam_t, res_t, jac_t, grad_t, hes_t, hesl_t, Nelem)
     (hsum, hlsum, gsum) = NLSQ_LM.compact_rjghhl(ndata, grad_t, hes_t, hesl_t)
+    cp.cuda.stream.get_current_stream().synchronize()
+    print(hlsum[:,0])
+    print(hlsum.ravel()[batch_size])
+    print(hlsum[:,1])
+    #print(gsum[:,0])
+    #print(step_t[:,0])
+    print('\nbefore run:')
     gmw81sol.run(hlsum, -gsum, step_t, batch_size)
-
+    cp.cuda.stream.get_current_stream().synchronize()
+    print('\nafter run')
+    print(hlsum[:,0])
+    print(hlsum.ravel()[batch_size])
+    print(hlsum[:,1])
+    #print(gsum[:,0])
+    #print(step_t[:,0])
 
 cp.cuda.stream.get_current_stream().synchronize()
 end = time.time()
-print('After kernel')
 print('It took: ' + str(end - start) + ' s')
 
 ns = [0, batch_size - 1]
-printing = True
+printing=False
 if printing:
     for ni in ns:
         print('Show Iter: ')

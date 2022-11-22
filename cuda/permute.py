@@ -16,7 +16,7 @@ def lid_code():
 """
 __device__
 int lid(int i, int j) {
-	return i*(i+1) + j;
+	return i*(i+1)/2 + j;
 }
 """)
 	funcid = lid_funcid()
@@ -47,9 +47,8 @@ __device__
 int {{funcid}}(const {{fp_type}}* mat, int offset) {
 	{{fp_type}} max_abs = -1.0f;
 	int max_index = 0;
-	#pragma unroll
 	for (int i = offset; i < {{ndim}}; ++i) {
-		if ({{abs_fid}}(mat[{{lid_fid}}(i,i)]) > max_abs) {
+		if ({{abs_fid}}(mat[i*{{ndim}}+i]) > max_abs) {
 			max_index = i;
 		}
 	}
@@ -61,8 +60,8 @@ int {{funcid}}(const {{fp_type}}* mat, int offset) {
 
 	funcid = max_diag_abs_funcid(ndim, dtype)
 	abs_fid = 'fabsf' if dtype == cp.float32 else 'fabs'
-	lid_fid = lid_funcid()
-	return codestr.render(funcid=funcid, fp_type=type, ndim=ndim, abs_fid=abs_fid, lid_fid=lid_fid)
+
+	return codestr.render(funcid=funcid, fp_type=type, ndim=ndim, abs_fid=abs_fid)
 
 class MaxDiagAbs(CudaFunction):
 	def __init__(self, ndim: int, dtype: cp.dtype):
@@ -78,22 +77,20 @@ class MaxDiagAbs(CudaFunction):
 		return self.code
 
 	def get_deps(self):
-		return [LID()]
+		return list()
 
 
-def row_interchange_i_funcid(dtype: cp.dtype):
-	return 'row_interchange_i' + ctc.type_funcid(dtype)
+def row_interchange_i_funcid(ndim: int, dtype: cp.dtype):
+	return 'row_interchange_i' + ctc.dim_type_funcid(ndim, dtype)
 
-def row_interchange_i_code(dtype: cp.dtype):
+def row_interchange_i_code(ndim: int, dtype: cp.dtype):
 	codestr = Template(
 """
 __device__
 void {{funcid}}({{fp_type}}* mat, int ii, int jj) {
-	int ncopy = max(ii,jj);
-	#pragma unroll
-	for (int k = 0; k < ncopy; ++k) {
-		int ikn = {{lid_fid}}(ii,k);
-		int jkn = {{lid_fid}}(jj,k);
+	for (int k = 0; k < {{ndim}}; ++k) {
+		int ikn = ii*{{ndim}}+k;
+		int jkn = jj*{{ndim}}+k;
 
 		{{fp_type}} temp;
 		temp = mat[ikn];
@@ -105,17 +102,16 @@ void {{funcid}}({{fp_type}}* mat, int ii, int jj) {
 
 	type = ctc.check_fp32_or_fp64(CudaTensor(None, dtype), 'row_interchange_i')
 
-	funcid = row_interchange_i_funcid(dtype)
-	lid_fid = lid_funcid()
+	funcid = row_interchange_i_funcid(ndim, dtype)
 
-	return codestr.render(funcid=funcid, fp_type=type, lid_fid=lid_fid)
+	return codestr.render(funcid=funcid, fp_type=type, ndim=ndim)
 
 class RowInterchangeI(CudaFunction):
 	def __init__(self, ndim: int, dtype: cp.dtype):
 		self.ndim = ndim
 		self.dtype = dtype
-		self.funcid = row_interchange_i_funcid(dtype)
-		self.code = row_interchange_i_code(dtype)
+		self.funcid = row_interchange_i_funcid(ndim, dtype)
+		self.code = row_interchange_i_code(ndim, dtype)
 
 	def get_device_funcid(self):
 		return self.funcid
@@ -124,7 +120,7 @@ class RowInterchangeI(CudaFunction):
 		return self.code
 
 	def get_deps(self):
-		return [LID()]
+		return list()
 
 
 def col_interchange_i_funcid(ndim: int, dtype: cp.dtype):
@@ -135,11 +131,9 @@ def col_interchange_i_code(ndim: int, dtype: cp.dtype):
 """
 __device__
 void {{funcid}}({{fp_type}}* mat, int ii, int jj) {
-	int ncopy = max({{ndim}} - ii, {{ndim}} - jj);
-	#pragma unroll
-	for (int k = 0; k < ncopy; ++k) {
-		int kin = {{lid_fid}}(k,ii);
-		int kjn = {{lid_fid}}(k,jj);
+	for (int k = 0; k < {{ndim}}; ++k) {
+		int kin = k*{{ndim}}+ii;
+		int kjn = k*{{ndim}}+jj;
 
 		{{fp_type}} temp;
 		temp = mat[kin];
@@ -153,9 +147,8 @@ void {{funcid}}({{fp_type}}* mat, int ii, int jj) {
 	type = ctc.check_fp32_or_fp64(CudaTensor(None, dtype), 'col_interchange_i')
 
 	funcid = col_interchange_i_funcid(ndim, dtype)
-	lid_fid = lid_funcid()
 
-	return codestr.render(funcid=funcid, fp_type=type, ndim=ndim, lid_fid=lid_fid)
+	return codestr.render(funcid=funcid, fp_type=type, ndim=ndim)
 
 class ColInterchangeI(CudaFunction):
 	def __init__(self, ndim: int, dtype: cp.dtype):
@@ -171,7 +164,7 @@ class ColInterchangeI(CudaFunction):
 		return self.code
 
 	def get_deps(self):
-		return [LID()]
+		return list()
 
 
 def diag_pivot_funcid(ndim: int, dtype: cp.dtype):
@@ -182,11 +175,9 @@ def diag_pivot_code(ndim: int, dtype: cp.dtype):
 """
 __device__
 void {{funcid}}({{fp_type}}* mat, int* perm) {
-	#pragma unroll
 	for (int i = 0; i < {{ndim}}; ++i) {
 		perm[i] = i;
 	}
-	#pragma unroll
 	for (int i = 0; i < {{ndim}}; ++i) {
 		int max_abs = {{max_diag_abs_fid}}(mat, i);
 		{{row_interchange_fid}}(mat, i, max_abs);
@@ -202,7 +193,7 @@ void {{funcid}}({{fp_type}}* mat, int* perm) {
 
 	funcid = diag_pivot_funcid(ndim, dtype)
 	max_diag_abs_fid = max_diag_abs_funcid(ndim, dtype)
-	row_fid = row_interchange_i_funcid(dtype)
+	row_fid = row_interchange_i_funcid(ndim, dtype)
 	col_fid = col_interchange_i_funcid(ndim, dtype)
 
 	return codestr.render(funcid=funcid, fp_type=type, ndim=ndim, 
@@ -234,7 +225,6 @@ def permute_vec_code(ndim: int, dtype: cp.dtype):
 """
 __device__
 void {{funcid}}(const {{fp_type}}* vec, const int* perm, {{fp_type}}* ovec) {
-	#pragma unroll
 	for (int i = 0; i < {{ndim}}; ++i) {
 		ovec[i] = vec[perm[i]];
 	}
@@ -272,7 +262,6 @@ def inv_permute_vec_code(ndim: int, dtype: cp.dtype):
 """
 __device__
 void {{funcid}}(const {{fp_type}}* vec, const int* perm, {{fp_type}}* ovec) {
-	#pragma unroll
 	for (int i = 0; i < {{ndim}}; ++i) {
 		ovec[perm[i]] = vec[i];
 	}

@@ -29,7 +29,7 @@ void {{funcid}}({{fp_type}}* mat) {
 	{{fp_type}} arr[{{ndim}}];
 
 	for (int i = 0; i < {{ndim}}; ++i) {
-		temp = {{abs_func}}(mat[{{lid_fid}}(i,i)]);
+		temp = {{abs_func}}(mat[i*{{ndim}}+i]);
 		if (m1 < temp) {
 			m1 = temp;
 		}
@@ -41,7 +41,7 @@ void {{funcid}}({{fp_type}}* mat) {
 
 	for (int i = 1; i < {{ndim}}; ++i) {
 		for (int j = 0; j < i; ++j) {
-			temp = {{abs_func}}(mat[{{lid_fid}}(i,j)]);
+			temp = {{abs_func}}(mat[i*{{ndim}}+j]);
 			if (m2 < temp) {
 				m2 = temp;
 			}
@@ -57,7 +57,7 @@ void {{funcid}}({{fp_type}}* mat) {
 	}
 
 	for (int i = 0; i < {{ndim}}; ++i) {
-		{{fp_type}} d = {{abs_type}}(mat[{{lid_fid}}(i,i)]);
+		{{fp_type}} d = {{abs_type}}(mat[i*{{ndim}}+i]);
 
 		if (d < {{machine_eps}}) {
 			d = {{machine_eps}};
@@ -65,7 +65,7 @@ void {{funcid}}({{fp_type}}* mat) {
 
 		m2 = 0.0f;
 		for (int j = i + 1; j < {{ndim}}; ++j) {
-			temp = {{abs_func}}(mat[{{lid_fid}}(j,i)]);
+			temp = {{abs_func}}(mat[j*{{ndim}}+i]);
 			if (m2 < temp) {
 				m2 = temp;
 			}
@@ -77,16 +77,17 @@ void {{funcid}}({{fp_type}}* mat) {
 			d = m2 / beta2;
 		}
 
-		mat[{{lid_fid}}(i,i)] = d;
+		mat[i*{{ndim}}+i] = d;
 
 		for (int j = i + 1; j < {{ndim}}; ++j) {
-			arr[j] = mat[{{lid_fid}}(j,i)];
-			mat[{{lid_fid}}(j,i)] /= d;
+			int ji = j*{{ndim}}+i;
+			arr[j] = mat[ji];
+			mat[ji] /= d;
 		}
 
 		for (int j = i + 1; j < {{ndim}}; ++j) {
 			for (int k = j; k < {{ndim}}; ++k) {
-				mat[{{lid_fid}}(k,j)] -= arr[j] * mat[{{lid_fid}}(k,i)];
+				mat[k*{{ndim}}+j] -= arr[j] * mat[k*{{ndim}}+i];
 			}
 		}
 
@@ -110,9 +111,8 @@ void {{funcid}}({{fp_type}}* mat) {
 
 
 	funcid = gmw81_funcid(ndim, dtype)
-	lid_fid = permute.lid_funcid()
 
-	return codestr.render(funcid=funcid, fp_type=type, ndim=ndim, lid_fid=lid_fid,
+	return codestr.render(funcid=funcid, fp_type=type, ndim=ndim,
 		abs_func=abs_func, sqrt_func=sqrt_func, machine_eps=machine_eps)
 
 class GMW81(CudaFunction):
@@ -139,17 +139,25 @@ void {{funcid}}({{fp_type}}* mat, int N)
 {
 	int tid = blockDim.x * blockIdx.x + threadIdx.x;
 	if (tid < N) {
-		{{fp_type}} mat_copy[{{nmat}}];
-		#pragma unroll
-		for (int i = 0; i < {{nmat}}; ++i) {
-			mat_copy[i] = mat[i*N+tid];
+		{{fp_type}} mat_copy[{{ndim}}*{{ndim}}];
+		int k = 0;
+		for (int i = 0; i < {{ndim}}; ++i) {
+			for (int j = 0; i <= j; ++j) {
+				{{fp_type}} temp = mat[k*N+tid];
+				mat_copy[i*{{ndim}}+j] = temp;
+				mat_copy[j*{{ndim}}+i] = temp;
+				++k;
+			}
 		}
 
 		{{dfuncid}}(mat_copy);
 
-		#pragma unroll
-		for (int i = 0; i < {{nmat}}; ++i) {
-			mat[i*N+tid] = mat_copy[i];
+		k = 0;
+		for (int i = 0; i < {{ndim}}; ++i) {
+			for (int j = 0; j <= i; ++j) {
+				mat[k*{{ndim}}+tid] = mat_copy[i*{{ndim}}+j];
+				++k;
+			}
 		}
 	}
 }
@@ -158,12 +166,11 @@ void {{funcid}}({{fp_type}}* mat, int N)
 		dfid = self.get_device_funcid()
 
 		ndim=self.ndim
-		nmat=round(ndim*(ndim+1)/2)
 
-		return temp.render(funcid=fid, dfuncid=dfid, fp_type=self.type_str,ndim=ndim,nmat=nmat)
+		return temp.render(funcid=fid, dfuncid=dfid, fp_type=self.type_str,ndim=ndim)
 
 	def get_deps(self):
-		return [permute.LID()]
+		return list()
 
 # FORWARD AND BACKWARD SUBSTITUTIONS #
 
@@ -178,9 +185,9 @@ void {{funcid}}(const {{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol
 	for (int i = 0; i < {{ndim}}; ++i) {
 		sol[i] = rhs[i];
 		for (int j = 0; j < i; ++j) {
-			sol[i] -= mat[{{lid_fid}}(i,j)] * mat[{{lid_fid}}(j,i)] * sol[j];
+			sol[i] -= mat[i*{{ndim}}+j] * mat[j*{{ndim}}+i] * sol[j];
 		}
-		sol[i] /= mat[{{lid_fid}}(i,i)];
+		sol[i] /= mat[i*{{ndim}}+i];
 	}
 }
 """)
@@ -188,9 +195,8 @@ void {{funcid}}(const {{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol
 	type: str = ctc.check_fp32_or_fp64(CudaTensor(None, dtype), 'forward_subs_unit_diaged')
 
 	funcid = forward_subs_unit_diaged_funcid(ndim, dtype)
-	lid_fid = permute.lid_funcid()
 
-	return codestr.render(funcid=funcid, fp_type=type, ndim=ndim, lid_fid=lid_fid)
+	return codestr.render(funcid=funcid, fp_type=type, ndim=ndim)
 
 class ForwardSubsUnitDiaged(CudaFunction):
 	def __init__(self, ndim: int, dtype: cp.dtype):
@@ -203,54 +209,11 @@ class ForwardSubsUnitDiaged(CudaFunction):
 	def get_device_funcid(self):
 		return self.funcid
 
-	def get_kernel_funcid(self):
-		funcid = self.funcid
-		return 'k_' + funcid
-
 	def get_device_code(self):
 		return self.code
 
-	def get_kernel_code(self):
-		temp = Template(
-"""
-extern \"C\" __global__
-void {{funcid}}(const {{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol, int N) 
-{
-	int tid = blockDim.x * blockIdx.x + threadIdx.x;
-	if (tid < N) {
-		{{fp_type}} mat_copy[{{nmat}}];
-		{{fp_type}} rhs_copy[{{ndim}}];
-		{{fp_type}} sol_copy[{{ndim}}];
-
-		#pragma unroll
-		for (int i = 0; i < {{ndim}}; ++i) {
-			rhs_copy[i] = rhs[i*N+tid];
-			sol_copy[i] = sol[i*N+tid];
-		}
-		#pragma unroll
-		for (int i = 0; i < {{nmat}}; ++i) {
-			mat_copy[i] = mat[i*N+tid];
-		}
-
-		{{dfuncid}}(mat_copy, rhs_copy, sol_copy);
-
-		#pragma unroll
-		for (int i = 0; i < {{ndim}}; ++i) {
-			sol[i*N+tid] = sol_copy[i];
-		}
-	}
-}
-""")
-		fid = self.get_kernel_funcid()
-		dfid = self.get_device_funcid()
-
-		ndim=self.ndim
-		nmat = round(ndim*(ndim+1)/2)
-
-		return temp.render(funcid=fid, dfuncid=dfid, fp_type=self.type_str, ndim=ndim, nmat=nmat)
-
 	def get_deps(self):
-		return [permute.LID()]
+		return list()
 
 
 def backward_subs_unit_t_funcid(ndim: int, dtype: cp.dtype):
@@ -260,12 +223,12 @@ def backward_subs_unit_t_code(ndim: int, dtype: cp.dtype):
 	codestr = Template(
 """
 __device__
-void {{funcid}}({{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol) {
+void {{funcid}}(const {{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol) {
 	#pragma unroll
 	for (int i = {{ndim}} - 1; i >= 0; --i) {
 		sol[i] = rhs[i];
 		for (int j = i + 1; j < {{ndim}}; ++j) {
-			sol[i] -= mat[{{lid_fid}}(j,i)] * sol[j];
+			sol[i] -= mat[j*{{ndim}}+i] * sol[j];
 		}
 	}
 }
@@ -274,9 +237,8 @@ void {{funcid}}({{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol) {
 	type: str = ctc.check_fp32_or_fp64(CudaTensor(None, dtype), 'backward_subs_unit_t')
 
 	funcid = backward_subs_unit_t_funcid(ndim, dtype)
-	lid_fid = permute.lid_funcid()
 
-	return codestr.render(funcid=funcid, fp_type=type, ndim=ndim, lid_fid=lid_fid)
+	return codestr.render(funcid=funcid, fp_type=type, ndim=ndim)
 
 class BackwardSubsUnitT(CudaFunction):
 	def __init__(self, ndim: int, dtype: cp.dtype):
@@ -289,53 +251,11 @@ class BackwardSubsUnitT(CudaFunction):
 	def get_device_funcid(self):
 		return self.funcid
 
-	def get_kernel_funcid(self):
-		funcid = self.funcid
-		return 'k_' + funcid
-
 	def get_device_code(self):
 		return self.code
 
-	def get_kernel_code(self):
-		temp = Template(
-"""
-extern \"C\" __global__
-void {{funcid}}(const {{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol, int N) 
-{
-	int tid = blockDim.x * blockIdx.x + threadIdx.x;
-	if (tid < N) {
-		{{fp_type}} mat_copy[{{nmat}}];
-		{{fp_type}} rhs_copy[{{ndim}}];
-		{{fp_type}} sol_copy[{{ndim}}];
-
-		#pragma unroll
-		for (int i = 0; i < {{ndim}}; ++i) {
-			rhs_copy[i] = rhs[i*N+tid];
-			sol_copy[i] = sol[i*N+tid];
-		}
-		#pragma unroll
-		for (int i = 0; i < {{nmat}}; ++i) {
-			mat_rhs[i] = mat[i*N+tid];
-		}
-
-		{{dfuncid}}(mat_copy, rhs_copy, sol_copy);
-
-		#pragma unroll
-		for (int i = 0; i < {{ndim}}; ++i) {
-			sol[i*N+tid] = sol_copy[i];
-		}
-	}
-}
-""")
-		fid = self.get_kernel_funcid()
-		dfid = self.get_device_funcid()
-		ndim = self.ndim
-		nmat = round(self.ndim*(self.ndim+1)/2)
-
-		return temp.render(funcid=fid, dfuncid=dfid, fp_type=self.type_str, ndim=ndim, nmat=nmat)
-
 	def get_deps(self):
-		return [permute.LID()]
+		return list()
 
 
 # SOLVERS
@@ -347,7 +267,7 @@ def ldl_solve_code(ndim: int, dtype: cp.dtype):
 	codestr = Template(
 """
 __device__
-void {{funcid}}({{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol) {
+void {{funcid}}(const {{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol) {
 	{{fp_type}} arr[{{ndim}}];
 	{{forward_funcid}}(mat, rhs, arr);
 	{{backward_funcid}}(mat, arr, sol);
@@ -375,48 +295,8 @@ class LDLSolve(CudaFunction):
 	def get_device_funcid(self):
 		return self.funcid
 
-	def get_kernel_funcid(self):
-		funcid = self.funcid
-		return 'k_' + funcid
-
 	def get_device_code(self):
 		return self.code
-
-	def get_kernel_code(self):
-		temp = Template(
-"""
-extern \"C\" __global__
-void {{funcid}}(const {{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol, int N) 
-{
-	int tid = blockDim.x * blockIdx.x + threadIdx.x;
-	if (tid < N) {
-		{{fp_type}} mat_copy[{{nmat}}];
-		{{fp_type}} rhs_copy[{{ndim}}];
-		{{fp_type}} sol_copy[{{ndim}}];
-
-		#pragma unroll
-		for (int i = 0; i < {{ndim}}; ++i) {
-			rhs_copy[i] = rhs[i*N+tid];
-			sol_copy[i] = sol[i*N+tid];
-		}
-		#pragma unroll
-		for (int i = 0; i < {{nmat}}; ++i) {
-			mat_rhs[i] = mat[i*N+tid];
-		}
-
-		{{dfuncid}}(mat, rhs, sol);
-
-		#pragma unroll
-		for (int i = 0; i < {{ndim}}; ++i) {
-			sol[i*N+tid] = sol_copy[i];
-		}
-	}
-}
-""")
-		fid = self.get_kernel_funcid()
-		dfid = self.get_device_funcid()
-
-		return temp.render(funcid=fid, dfuncid=dfid, fp_type=self.type_str)
 
 	def get_deps(self):
 		return [ForwardSubsUnitDiaged(self.ndim, self.dtype), BackwardSubsUnitT(self.ndim, self.dtype)]
@@ -477,7 +357,6 @@ class GMW81Solver(CudaFunction):
 		blockSize = math.ceil(N / Nthreads)
 		self.run_func((blockSize,),(Nthreads,),(mat, rhs, sol, N))
 
-
 	def get_device_funcid(self):
 		return self.funcid
 
@@ -497,25 +376,47 @@ void {{funcid}}({{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol, int 
 	int tid = blockDim.x * blockIdx.x + threadIdx.x;
 	if (tid < N) {
 
-		{{fp_type}} mat_copy[{{nmat}}];
+		{{fp_type}} mat_copy[{{ndim}}*{{ndim}}];
 		{{fp_type}} rhs_copy[{{ndim}}];
 		{{fp_type}} sol_copy[{{ndim}}];
 
-		#pragma unroll
 		for (int i = 0; i < {{ndim}}; ++i) {
 			rhs_copy[i] = rhs[i*N+tid];
 			sol_copy[i] = sol[i*N+tid];
 		}
-		#pragma unroll
-		for (int i = 0; i < {{nmat}}; ++i) {
-			mat_copy[i] = mat[i*N+tid];
+		int k = 0;
+		for (int i = 0; i < {{ndim}}; ++i) {
+			for (int j = 0; j <= i; ++j) {
+				{{fp_type}} temp = mat[k*N+tid];
+				if (tid == 0) {
+					printf("(%f,%d,%d,%d) , ", temp, k, tid, k*N+tid);
+					printf("(%d,%d)  ", i, j);
+				}
+				mat_copy[i*{{ndim}}+j] = temp;
+				mat_copy[j*{{ndim}}+i] = temp;
+				++k;
+			}
+		}
+		if (tid == 0) {
+			printf("Before GMW81_solver\\n");
 		}
 
 		{{dfuncid}}(mat_copy, rhs_copy, sol_copy);
 
-		#pragma unroll
+		if (tid == 0) {
+			printf("After GMW81_solver\\n");
+		}
+
 		for (int i = 0; i < {{ndim}}; ++i) {
 			sol[i*N+tid] = sol_copy[i];
+		}
+
+		k = 0;
+		for (int i = 0; i < {{ndim}}; ++i) {
+			for (int j = 0; j <= i; ++j) {
+				mat[k*{{ndim}}+tid] = mat_copy[i*{{ndim}}+j];
+				++k;
+			}
 		}
 	}
 }

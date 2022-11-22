@@ -467,7 +467,7 @@ class NLSQ_LM:
 		hsum = hes.transpose().reshape(N,ndata,nhes).sum(axis=1).transpose()
 		hlsum = hesl.transpose().reshape(N,ndata,nhes).sum(axis=1).transpose()
 		gsum = grad.transpose().reshape(N,ndata,nparam).sum(axis=1).transpose()
-		return (hsum, hlsum, gsum)
+		return (cp.ascontiguousarray(hsum), cp.ascontiguousarray(hlsum), cp.ascontiguousarray(gsum))
 
 	
 
