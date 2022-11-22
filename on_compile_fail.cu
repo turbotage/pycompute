@@ -3,7 +3,6 @@ __device__
 int max_diag_abs_4_f(const float* mat, int offset) {
 	float max_abs = -1.0f;
 	int max_index = 0;
-	#pragma unroll
 	for (int i = offset; i < 4; ++i) {
 		if (fabsf(mat[i*4+i]) > max_abs) {
 			max_index = i;
@@ -14,10 +13,9 @@ int max_diag_abs_4_f(const float* mat, int offset) {
 
 __device__
 void row_interchange_i_4_f(float* mat, int ii, int jj) {
-	#pragma unroll
-	for (int k = 0; k < ; ++k) {
-		int ikn = ii*+k;
-		int jkn = jj*+k;
+	for (int k = 0; k < 4; ++k) {
+		int ikn = ii*4+k;
+		int jkn = jj*4+k;
 
 		float temp;
 		temp = mat[ikn];
@@ -28,7 +26,6 @@ void row_interchange_i_4_f(float* mat, int ii, int jj) {
 
 __device__
 void col_interchange_i_4_f(float* mat, int ii, int jj) {
-	#pragma unroll
 	for (int k = 0; k < 4; ++k) {
 		int kin = k*4+ii;
 		int kjn = k*4+jj;
@@ -43,11 +40,9 @@ void col_interchange_i_4_f(float* mat, int ii, int jj) {
 
 __device__
 void diag_pivot_4_f(float* mat, int* perm) {
-	#pragma unroll
 	for (int i = 0; i < 4; ++i) {
 		perm[i] = i;
 	}
-	#pragma unroll
 	for (int i = 0; i < 4; ++i) {
 		int max_abs = max_diag_abs_4_f(mat, i);
 		row_interchange_i_4_f(mat, i, max_abs);
@@ -135,7 +130,6 @@ void gmw81_4_f(float* mat) {
 
 __device__
 void permute_vec_4_f(const float* vec, const int* perm, float* ovec) {
-	#pragma unroll
 	for (int i = 0; i < 4; ++i) {
 		ovec[i] = vec[perm[i]];
 	}
@@ -172,7 +166,6 @@ void ldl_solve_4_f(const float* mat, const float* rhs, float* sol) {
 
 __device__
 void inv_permute_vec_4_f(const float* vec, const int* perm, float* ovec) {
-	#pragma unroll
 	for (int i = 0; i < 4; ++i) {
 		ovec[perm[i]] = vec[i];
 	}
@@ -197,6 +190,10 @@ void k_gmw81_solver_4_f(float* mat, const float* rhs, float* sol, int N)
 	int tid = blockDim.x * blockIdx.x + threadIdx.x;
 	if (tid < N) {
 
+		if (tid == 0) {
+			for 
+		}
+
 		float mat_copy[4*4];
 		float rhs_copy[4];
 		float sol_copy[4];
@@ -207,15 +204,26 @@ void k_gmw81_solver_4_f(float* mat, const float* rhs, float* sol, int N)
 		}
 		int k = 0;
 		for (int i = 0; i < 4; ++i) {
-			for (int j = 0; i <= j; ++j) {
+			for (int j = 0; j <= i; ++j) {
 				float temp = mat[k*N+tid];
+				if (tid == 0) {
+					printf("(%f,%d,%d,%d) , ", temp, k, tid, k*N+tid);
+					printf("(%d,%d)  ", i, j);
+				}
 				mat_copy[i*4+j] = temp;
 				mat_copy[j*4+i] = temp;
 				++k;
 			}
 		}
+		if (tid == 0) {
+			printf("Before GMW81_solver\n");
+		}
 
 		gmw81_solver_4_f(mat_copy, rhs_copy, sol_copy);
+
+		if (tid == 0) {
+			printf("After GMW81_solver\n");
+		}
 
 		for (int i = 0; i < 4; ++i) {
 			sol[i*N+tid] = sol_copy[i];
@@ -224,7 +232,7 @@ void k_gmw81_solver_4_f(float* mat, const float* rhs, float* sol, int N)
 		k = 0;
 		for (int i = 0; i < 4; ++i) {
 			for (int j = 0; j <= i; ++j) {
-				mat[k*4+tid] = mat_copy[i*4+j];
+				mat[k*N+tid] = mat_copy[i*4+j];
 				++k;
 			}
 		}

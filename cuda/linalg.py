@@ -199,4 +199,12 @@ void {{funcid}}({{fp_type}}* sred, unsigned int N)
 		return deps
 
 
+def sum_res_jac_hes_hesl_funcid(nparam: int, dtype: cp.dtype):
+	return 'sum_res_jac_hes_hesl' + ctc.dim_type_funcid(nparam, dtype)
+
+def sum_res_jac_hes_hesl_code(nparam: int, dtype: cp.dtype):
+	temp = Template(
+"""
+	
+""")
 

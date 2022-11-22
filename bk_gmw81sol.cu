@@ -202,35 +202,18 @@ void k_gmw81_solver_4_f(float* mat, const float* rhs, float* sol, int N)
 		for (int i = 0; i < 4; ++i) {
 			for (int j = 0; j <= i; ++j) {
 				float temp = mat[k*N+tid];
-				if (tid == 0) {
-					printf("(%f,%d,%d,%d) , ", temp, k, tid, k*N+tid);
-					printf("(%d,%d)  ", i, j);
-				}
 				mat_copy[i*4+j] = temp;
-				mat_copy[j*4+i] = temp;
+				if (i != j) {
+					mat_copy[j*4+i] = temp;
+				}
 				++k;
 			}
-		}
-		if (tid == 0) {
-			printf("Before GMW81_solver\n");
 		}
 
 		gmw81_solver_4_f(mat_copy, rhs_copy, sol_copy);
 
-		if (tid == 0) {
-			printf("After GMW81_solver\n");
-		}
-
 		for (int i = 0; i < 4; ++i) {
 			sol[i*N+tid] = sol_copy[i];
-		}
-
-		k = 0;
-		for (int i = 0; i < 4; ++i) {
-			for (int j = 0; j <= i; ++j) {
-				mat[k*4+tid] = mat_copy[i*4+j];
-				++k;
-			}
 		}
 	}
 }

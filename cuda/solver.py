@@ -388,35 +388,18 @@ void {{funcid}}({{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol, int 
 		for (int i = 0; i < {{ndim}}; ++i) {
 			for (int j = 0; j <= i; ++j) {
 				{{fp_type}} temp = mat[k*N+tid];
-				if (tid == 0) {
-					printf("(%f,%d,%d,%d) , ", temp, k, tid, k*N+tid);
-					printf("(%d,%d)  ", i, j);
-				}
 				mat_copy[i*{{ndim}}+j] = temp;
-				mat_copy[j*{{ndim}}+i] = temp;
+				if (i != j) {
+					mat_copy[j*{{ndim}}+i] = temp;
+				}
 				++k;
 			}
-		}
-		if (tid == 0) {
-			printf("Before GMW81_solver\\n");
 		}
 
 		{{dfuncid}}(mat_copy, rhs_copy, sol_copy);
 
-		if (tid == 0) {
-			printf("After GMW81_solver\\n");
-		}
-
 		for (int i = 0; i < {{ndim}}; ++i) {
 			sol[i*N+tid] = sol_copy[i];
-		}
-
-		k = 0;
-		for (int i = 0; i < {{ndim}}; ++i) {
-			for (int j = 0; j <= i; ++j) {
-				mat[k*{{ndim}}+tid] = mat_copy[i*{{ndim}}+j];
-				++k;
-			}
 		}
 	}
 }
