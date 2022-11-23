@@ -55,59 +55,64 @@ void diag_pivot_4_f(float* mat, int* perm) {
 
 __device__
 void gmw81_4_f(float* mat) {
-	float m1 = 0.0f;
-	float m2 = 0.0f;
-	float beta2 = 0.0f;
-	float temp;
+	float t0;
+	float t1 = 0.0f; // gamma
+	float t2 = 0.0f; // nu
+	float beta2 = 2e-7;
+	float delta = 2e-7;
 	float arr[4];
 
 	for (int i = 0; i < 4; ++i) {
-		temp = fabsf(mat[i*4+i]);
-		if (m1 < temp) {
-			m1 = temp;
-		}
-	}
-
-	if (beta2 < m1) {
-		beta2 = m1;
-	}
-
-	for (int i = 1; i < 4; ++i) {
-		for (int j = 0; j < i; ++j) {
-			temp = fabsf(mat[i*4+j]);
-			if (m2 < temp) {
-				m2 = temp;
+		for (int j = 0; j <= i; ++j) {
+			t0 = fabsf(mat[i*4+i]);
+			if (i == j) {
+				if (t0 > t1) {
+					t1 = t0;
+				}
+			} else {
+				if (t0 > t2) {
+					t2 = t0;
+				}
 			}
 		}
 	}
 
 	if (4 > 1) {
-		m2 /= sqrtf(4*4 - 1);
+		t2 /= sqrtf(4*4 - 1);
 	}
 
-	if (beta2 < m2) {
-		beta2 = m2;
+
+	if (beta2 < t1) {
+		beta2 = t1;
 	}
+	if (beta2 < t2) {
+		beta2 = t2;
+	}
+	t0 = t1 + t2;
+	if (t0 > 1.0) {
+		delta *= t0;
+	}
+	// delta = eps*max(gamma + nu, 1)
+	// beta2 = max(gamma, nu/sqrt(n^^2-1), eps)
 
 	for (int i = 0; i < 4; ++i) {
 		float d = (mat[i*4+i]);
 
-		if (d < 1e-6) {
-			d = 1e-6;
-		}
-
-		m2 = 0.0f;
+		t1 = 0.0f;
 		for (int j = i + 1; j < 4; ++j) {
-			temp = fabsf(mat[j*4+i]);
-			if (m2 < temp) {
-				m2 = temp;
+			t0 = fabsf(mat[j*4+i]);
+			if (t1 < t0) {
+				t1 = t0;
 			}
 		}
+		t1 *= t1; // t1 holds theta
 
-		m2 *= m2;
-
-		if (m2 > d * beta2) {
-			d = m2 / beta2;
+		t0 = t1 / beta2;
+		if (d < t0) {
+			d = t0;
+		}
+		if (d < delta) {
+			d = delta;
 		}
 
 		mat[i*4+i] = d;
@@ -140,7 +145,7 @@ void forward_subs_unit_diaged_4_f(const float* mat, const float* rhs, float* sol
 	for (int i = 0; i < 4; ++i) {
 		sol[i] = rhs[i];
 		for (int j = 0; j < i; ++j) {
-			sol[i] -= mat[i*4+j] * mat[j*4+i] * sol[j];
+			sol[i] -= mat[i*4+j] * mat[j*4+j] * sol[j];
 		}
 		sol[i] /= mat[i*4+i];
 	}
@@ -180,7 +185,7 @@ void gmw81_solver_4_f(float* mat, const float* rhs, float* sol) {
 	gmw81_4_f(mat);
 	//permute_vec_4_f(rhs, perm, arr1);
 	//ldl_solve_4_f(mat, arr1, arr2);
-	ldl_solve_4_f(mat,rhs,sol);
+	ldl_solve_4_f(mat, rhs, sol);
 	//inv_permute_vec_4_f(arr2, perm, sol);
 }
 
@@ -214,6 +219,14 @@ void k_gmw81_solver_4_f(float* mat, const float* rhs, float* sol, int N)
 
 		for (int i = 0; i < 4; ++i) {
 			sol[i*N+tid] = sol_copy[i];
+		}
+
+		k = 0;
+		for (int i = 0; i < 4; ++i) {
+			for (int j = 0; j <= i; ++j) {
+				mat[k*N+tid] = mat_copy[i*4+j];
+				++k;
+			}
 		}
 	}
 }

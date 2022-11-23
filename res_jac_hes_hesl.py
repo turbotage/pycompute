@@ -38,7 +38,7 @@ data_t = from_cu_tensor(data, rand=True)
 
 lam = CudaTensor([1, Nelem], cp.float32)
 lam_t = from_cu_tensor(lam, ones=True)
-lam_t = 5*lam_t
+lam_t = 2*lam_t
 
 step = CudaTensor([4, batch_size], cp.float32)
 step_t = from_cu_tensor(step)
@@ -82,9 +82,10 @@ hsum = None
 hlsum = None
 gsum = None
 
-A = None
-L = None
-D = None
+Amat = None
+bvec = None
+Lmat = None
+Dmat = None
 
 def compact_to_full(mat):
 	nmat = mat.shape[0]
@@ -115,25 +116,51 @@ def compact_to_LD(mat):
 			k += 1
 	return (L,D)
 
-for i in range(0,10):
+for i in range(0,1):
 	rjghhl.run(pars_t, consts_t, data_t, lam_t, res_t, jac_t, grad_t, hes_t, hesl_t, Nelem)
 	(hsum, hlsum, gsum) = NLSQ_LM.compact_rjghhl(ndata, grad_t, hes_t, hesl_t)
-	#cp.cuda.stream.get_current_stream().synchronize()
+	cp.cuda.stream.get_current_stream().synchronize()
 	#print(hlsum[:,0])
 	#print('\nbefore run:')
-	#A = compact_to_full(hlsum[:,0])
-	#gmw81sol.run(hlsum, -gsum, step_t, batch_size)
-	#cp.cuda.stream.get_current_stream().synchronize()
+	Amat = compact_to_full(hlsum[:,0])
+	bvec = -gsum[:,0]
+
+	gmw81sol.run(hlsum, -gsum, step_t, batch_size)
+	cp.cuda.stream.get_current_stream().synchronize()
 	#print('\nafter run')
 	#print(hlsum[:,0])
-	#L, D = compact_to_LD(hlsum[:,0])
+	Lmat, Dmat = compact_to_LD(hlsum[:,0])
+
+print('Solutions: ')
+print(cp.linalg.solve(Amat, bvec))
+print(cp.linalg.solve(Lmat @ Dmat @ Lmat.transpose(), bvec))
+print(step_t[:,0])
+
+#print(Amat)
+#print(bvec)
+print('LD')
+print(Lmat)
+print(Dmat)
+
+print('Eigenvalues: ')
+print(cp.linalg.eigvalsh(Amat))
+print(cp.linalg.eigvalsh(Lmat @ Dmat @ Lmat.transpose()))
+
+print('Matrices: ')
+print(Amat) 
+print(Lmat @ Dmat @ Lmat.transpose())
+print(Lmat @ Dmat @ Lmat.transpose() - Amat)
 
 #print(A)
 #print(L @ D @ L.transpose())
 
+
+
 cp.cuda.stream.get_current_stream().synchronize()
 end = time.time()
 print('It took: ' + str(end - start) + ' s')
+
+
 
 ns = [0, batch_size - 1]
 printing=False
