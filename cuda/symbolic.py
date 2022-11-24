@@ -15,6 +15,15 @@ from .cuda_program import CudaFunction, CudaTensor
 from .cuda_program import CudaTensorChecking as ctc
 
 
+def eval_funcid(expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
+	return 'eval' + ctc.dim_dim_dim_type_funcid(len(pars_str), len(consts_str), ndata,
+		dtype, 'eval') + '_' + util.expr_hash(expr, 12)
+
+def eval_code(expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
+	return 'eval' + ctc.dim_dim_dim_type_funcid(len(pars_str), len(consts_str), ndata,
+		dtype, 'eval') + '_' + util.expr_hash(expr, 12))
+
+
 def eval_jac_hes_funcid(expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
 	return 'eval_jac_hes' + ctc.dim_dim_dim_type_funcid(len(pars_str), len(consts_str), ndata,
 		dtype, 'eval_jac_hes') + '_' + util.expr_hash(expr, 12)

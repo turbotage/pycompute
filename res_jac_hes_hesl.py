@@ -154,12 +154,9 @@ if printing1:
 	print(cp.linalg.eigvalsh(Lmat @ Dmat @ Lmat.transpose()))
 
 	print('Matrices: ')
-	print(Amat) 
+	print(Amat)
 	print(Lmat @ Dmat @ Lmat.transpose())
 	print(Lmat @ Dmat @ Lmat.transpose() - Amat)
-
-cp.cuda.stream.get_current_stream().synchronize()
-
 
 
 ns = [0, batch_size - 1]
