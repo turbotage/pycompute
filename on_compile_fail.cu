@@ -58,13 +58,19 @@ void gmw81_4_f(float* mat) {
 	float t0;
 	float t1 = 0.0f; // gamma
 	float t2 = 0.0f; // nu
-	float beta2 = 5e-7;
-	float delta = 5e-7;
+	float beta2 = 2e-7;
+	float delta = 2e-7;
 	float arr[4];
+
+	int tid = threadIdx.x + blockIdx.x*blockDim.x;
+	if (tid == 0) {
+		printf("beta2 = %f, delta = %f\n, beta2, delta);
+	}
+
 
 	for (int i = 0; i < 4; ++i) {
 		for (int j = 0; j <= i; ++j) {
-			t0 = fabsf(mat[i*4+i]);
+			t0 = fabsf(mat[i*4+j]);
 			if (i == j) {
 				if (t0 > t1) {
 					t1 = t0;
@@ -81,6 +87,10 @@ void gmw81_4_f(float* mat) {
 		t2 /= sqrtf(4*4 - 1);
 	}
 
+	if (tid == 0) {
+		printf("gamma = %f, nu = %f\n", t1, t2);
+	}
+
 
 	if (beta2 < t1) {
 		beta2 = t1;
@@ -95,14 +105,18 @@ void gmw81_4_f(float* mat) {
 	// delta = eps*max(gamma + nu, 1)
 	// beta2 = max(gamma, nu/sqrt(n^^2-1), eps)
 
+	if (tid == 0) {
+		printf("beta2 = %f, delta = %d\n", beta2, delta);
+	}
+
 	for (int i = 0; i < 4; ++i) {
 		float d = (mat[i*4+i]);
 
 		t1 = 0.0f;
 		for (int j = i + 1; j < 4; ++j) {
 			t0 = fabsf(mat[j*4+i]);
-			if (t1 < temp) {
-				t1 = temp;
+			if (t1 < t0) {
+				t1 = t0;
 			}
 		}
 		t1 *= t1; // t1 holds theta
@@ -113,6 +127,10 @@ void gmw81_4_f(float* mat) {
 		}
 		if (d < delta) {
 			d = delta;
+		}
+
+		if (tid == 0) {
+			printf("d = %f\n", d);
 		}
 
 		mat[i*4+i] = d;
@@ -145,7 +163,7 @@ void forward_subs_unit_diaged_4_f(const float* mat, const float* rhs, float* sol
 	for (int i = 0; i < 4; ++i) {
 		sol[i] = rhs[i];
 		for (int j = 0; j < i; ++j) {
-			sol[i] -= mat[i*4+j] * mat[j*4+i] * sol[j];
+			sol[i] -= mat[i*4+j] * mat[j*4+j] * sol[j];
 		}
 		sol[i] /= mat[i*4+i];
 	}
@@ -210,6 +228,10 @@ void k_gmw81_solver_4_f(float* mat, const float* rhs, float* sol, int N)
 				mat_copy[i*4+j] = temp;
 				if (i != j) {
 					mat_copy[j*4+i] = temp;
+				}
+				if (tid == 0) {
+					printf("gid = %d\n", k*N+tid);
+					printf("mat[%d,%d] = %f\n",i,j,temp);
 				}
 				++k;
 			}

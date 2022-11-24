@@ -60,19 +60,16 @@ void gmw81_4_f(float* mat) {
 	float t2 = 0.0f; // nu
 	float beta2 = 2e-7;
 	float delta = 2e-7;
-	float arr[4];
 
 	for (int i = 0; i < 4; ++i) {
 		for (int j = 0; j <= i; ++j) {
-			t0 = fabsf(mat[i*4+i]);
+			t0 = fabsf(mat[i*4+j]);
 			if (i == j) {
-				if (t0 > t1) {
+				if (t0 > t1)
 					t1 = t0;
-				}
 			} else {
-				if (t0 > t2) {
+				if (t0 > t2)
 					t2 = t0;
-				}
 			}
 		}
 	}
@@ -81,51 +78,47 @@ void gmw81_4_f(float* mat) {
 		t2 /= sqrtf(4*4 - 1);
 	}
 
-
-	if (beta2 < t1) {
+	if (beta2 < t1)
 		beta2 = t1;
-	}
-	if (beta2 < t2) {
+	if (beta2 < t2)
 		beta2 = t2;
-	}
 	t0 = t1 + t2;
-	if (t0 > 1.0) {
+	if (t0 > 1.0f)
 		delta *= t0;
-	}
 	// delta = eps*max(gamma + nu, 1)
 	// beta2 = max(gamma, nu/sqrt(n^^2-1), eps)
 
-	for (int i = 0; i < 4; ++i) {
-		float d = (mat[i*4+i]);
+	for (int j = 0; j < 4; ++j) { // compute column j
+		
+		for (int s = 0; s < j; ++s)
+			mat[j*4+s] /= mat[s*4+s];
+		for (int i = j + 1; i < 4; ++i) {
+			t0 = mat[i*4+j];
+			for (int s = 0; s < j; ++s)
+				t0 -= mat[j*4+s] * mat[i*4+s];
+			mat[i*4+j] = t0;
+		}
 
 		t1 = 0.0f;
-		for (int j = i + 1; j < 4; ++j) {
-			t0 = fabsf(mat[j*4+i]);
-			if (t1 < t0) {
+		for (int i = j + 1; i < 4; ++i) {
+			t0 = fabsf(mat[i*4+j]);
+			if (t1 < t0)
 				t1 = t0;
-			}
 		}
-		t1 *= t1; // t1 holds theta
+		t1 *= t1;
 
+		t2 = fabsf(mat[j*4+j]);
+		if (t2 < delta)
+			t2 = delta;
 		t0 = t1 / beta2;
-		if (d < t0) {
-			d = t0;
-		}
-		if (d < delta) {
-			d = delta;
-		}
+		if (t2 < t0)
+			t2 = t0;
+		mat[j*4+j] = t2;
 
-		mat[i*4+i] = d;
-
-		for (int j = i + 1; j < 4; ++j) {
-			int ji = j*4+i;
-			arr[j] = mat[ji];
-			mat[ji] /= d;
-		}
-
-		for (int j = i + 1; j < 4; ++j) {
-			for (int k = j; k < 4; ++k) {
-				mat[k*4+j] -= arr[j] * mat[k*4+i];
+		if (j < 4) {
+			for (int i = j + 1; i < 4; ++i) {
+				t0 = mat[i*4+j];
+				mat[i*4+i] -= t0*t0/t2;
 			}
 		}
 
@@ -178,15 +171,15 @@ void inv_permute_vec_4_f(const float* vec, const int* perm, float* ovec) {
 
 __device__
 void gmw81_solver_4_f(float* mat, const float* rhs, float* sol) {
-	//int perm[4];
-	//float arr1[4];
-	//float arr2[4];
-	//diag_pivot_4_f(mat, perm);
+	int perm[4];
+	float arr1[4];
+	float arr2[4];
+	diag_pivot_4_f(mat, perm);
 	gmw81_4_f(mat);
-	//permute_vec_4_f(rhs, perm, arr1);
-	//ldl_solve_4_f(mat, arr1, arr2);
-	ldl_solve_4_f(mat, rhs, sol);
-	//inv_permute_vec_4_f(arr2, perm, sol);
+	permute_vec_4_f(rhs, perm, arr1);
+	ldl_solve_4_f(mat, arr1, arr2);
+	//ldl_solve_4_f(mat, rhs, sol);
+	inv_permute_vec_4_f(arr2, perm, sol);
 }
 
 extern "C" __global__

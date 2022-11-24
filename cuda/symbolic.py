@@ -15,21 +15,22 @@ from .cuda_program import CudaFunction, CudaTensor
 from .cuda_program import CudaTensorChecking as ctc
 
 
-def eval_jac_hes_funcid(expr: str, pars_str: list[str], consts_str: list[str], dtype: cp.dtype):
-	return 'eval_jac_hes' + ctc.dim_dim_type_funcid(len(pars_str), len(consts_str), 
+def eval_jac_hes_funcid(expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
+	return 'eval_jac_hes' + ctc.dim_dim_dim_type_funcid(len(pars_str), len(consts_str), ndata,
 		dtype, 'eval_jac_hes') + '_' + util.expr_hash(expr, 12)
 
-def eval_jac_hes_code(expr: str, pars_str: list[str], consts_str: list[str], dtype: cp.dtype):
+def eval_jac_hes_code(expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
 	
 	rjh_temp = Template(
 """
 __device__
 void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, {{fp_type}}* eval, 
-	{{fp_type}}* jac, {{fp_type}}* hes, int tid, int N) 
+	{{fp_type}}* jac, {{fp_type}}* hes, int tid, int N, int Nelem) 
 {
 	{{fp_type}} pars[{{nparam}}];
+	int bucket = tid / {{ndata}};
 	for (int i = 0; i < {{nparam}}; ++i) {
-		pars[i] = params[i*N+tid];
+		pars[i] = params[i*N+bucket];
 	}
 
 {{sub_expr}}
@@ -48,7 +49,7 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, {{fp_type}
 	nparam = len(pars_str)
 	nconst = len(consts_str)
 
-	funcid = eval_jac_hes_funcid(expr, pars_str, consts_str, dtype)
+	funcid = eval_jac_hes_funcid(expr, pars_str, consts_str, ndata, dtype)
 
 	sym_expr = sympify(expr)
 	# convert parameter names to ease kernel generation
@@ -81,7 +82,7 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, {{fp_type}
 			ctstr = cuprint.tcs_d(s)
 		if ctstr == '0':
 			ctstr = '0.0f'
-		jac_str += '\tjac['+str(k)+'*N+tid] = '+ctstr+';\n'
+		jac_str += '\tjac['+str(k)+'*Nelem+tid] = '+ctstr+';\n'
 
 	hes_str = ""
 	for k in range(round(nparam*(nparam+1)/2)):
@@ -93,7 +94,7 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, {{fp_type}
 			ctstr = cuprint.tcs_d(s)
 		if ctstr == '0':
 			ctstr = '0.0f'
-		hes_str += '\thes['+str(k)+'*N+tid] = '+ctstr+';\n'
+		hes_str += '\thes['+str(k)+'*Nelem+tid] = '+ctstr+';\n'
 
 	for k in range(len(pars_str)):
 		p = pars_str[k]
@@ -105,7 +106,7 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, {{fp_type}
 
 	for k in range(len(consts_str)):
 		c = consts_str[k]
-		repl = 'consts['+str(k)+'*N+tid]'
+		repl = 'consts['+str(k)+'*Nelem+tid]'
 		sub_str = sub_str.replace(c, repl)
 		eval_str = eval_str.replace(c, repl)
 		jac_str = jac_str.replace(c, repl)
@@ -119,25 +120,28 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, {{fp_type}
 	return rjh_kernel
 
 class EvalJacHes(CudaFunction):
-	def __init__(self, expr: str, pars_str: list[str], consts_str: list[str], dtype: cp.dtype):
+	def __init__(self, expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
 
 		self.type_str = ctc.type_to_typestr(dtype)
 		self.pars_str = pars_str
 		self.consts_str = consts_str
+		self.ndata = ndata
 
-		self.funcid = eval_jac_hes_funcid(expr, pars_str, consts_str, dtype)
-		self.code = eval_jac_hes_code(expr, pars_str, consts_str, dtype)
+		self.funcid = eval_jac_hes_funcid(expr, pars_str, consts_str, ndata, dtype)
+		self.code = eval_jac_hes_code(expr, pars_str, consts_str, ndata, dtype)
 
 		self.mod = None
 		self.run_func = None
 
-	def run(self, pars, consts, eval, jac, hes, N):
+	def run(self, pars, consts, eval, jac, hes, Nelem):
 		if self.run_func == None:
 			self.build()
 
+		N = round(Nelem / self.ndata)
+
 		Nthreads = 32
 		blockSize = np.ceil(N / Nthreads)
-		self.run_func((blockSize,),(Nthreads,),(pars, consts, eval, jac, hes, N))
+		self.run_func((blockSize,),(Nthreads,),(pars, consts, eval, jac, hes, N, Nelem))
 
 	def get_device_funcid(self):
 		return self.funcid
@@ -183,22 +187,23 @@ void {{funcid}}(const {{fp_type}}* pars, const {{fp_type}}* consts,
 
 
 
-def res_jac_grad_hes_hesl_funcid(expr: str, pars_str: list[str], consts_str: list[str], dtype: cp.dtype):
-	return 'res_jac_grad_hes_hesl' + ctc.dim_dim_type_funcid(len(pars_str), len(consts_str), 
+def res_jac_grad_hes_hesl_funcid(expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
+	return 'res_jac_grad_hes_hesl' + ctc.dim_dim_dim_type_funcid(len(pars_str), len(consts_str), ndata, 
 		dtype, 'res_jac_grad_hes_hesl') + '_' + util.expr_hash(expr, 12)
 
-def res_jac_grad_hes_hesl_code(expr: str, pars_str: list[str], consts_str: list[str], dtype: cp.dtype):
+def res_jac_grad_hes_hesl_code(expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
 	
 	rjh_temp = Template(
 """
 __device__
 void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp_type}}* data, const {{fp_type}}* lam,
-	{{fp_type}}* res, {{fp_type}}* jac, {{fp_type}}* grad, {{fp_type}}* hes, {{fp_type}}* hesl, int tid, int N) 
+	{{fp_type}}* res, {{fp_type}}* jac, {{fp_type}}* grad, {{fp_type}}* hes, {{fp_type}}* hesl, int tid, int N, int Nelem) 
 {
 	{{fp_type}} pars[{{nparam}}];
+	int bucket = tid / {{ndata}};
 	#pragma unroll
 	for (int i = 0; i < {{nparam}}; ++i) {
-		pars[i] = params[i*N+tid];
+		pars[i] = params[i*N+bucket];
 	}
 
 {{sub_expr}}
@@ -213,20 +218,19 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp
 	#pragma unroll
 	for (int i = 0; i < {{nparam}}; ++i) {
 		for (int j = 0; j <= i; ++j) {
-			float jtemp = jac[i*N+tid] * jac[j*N+tid];
-			hes[k*N+tid] += jtemp;
+			float jtemp = jac[i*Nelem+tid] * jac[j*Nelem+tid];
+			hes[k*Nelem+tid] += jtemp;
 			if (i != j) {
-				hesl[k*N+tid] = hes[k*N+tid];
+				hesl[k*Nelem+tid] = hes[k*Nelem+tid];
 			} else {
-				hesl[k*N+tid] = hes[k*N+tid] + lam[tid]*jtemp;
+				hesl[k*Nelem+tid] = hes[k*Nelem+tid] + lam[tid]*jtemp;
 			}
 			++k;
 		}
 	}
 
-	#pragma unroll
 	for (int i = 0; i < {{nparam}}; ++i) {
-		grad[i*N+tid] = jac[i*N+tid] * res[tid];
+		grad[i*Nelem+tid] = jac[i*Nelem+tid] * res[tid];
 	}
 }
 """)
@@ -236,7 +240,7 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp
 	nparam = len(pars_str)
 	nconst = len(consts_str)
 
-	funcid = res_jac_grad_hes_hesl_funcid(expr, pars_str, consts_str, dtype)
+	funcid = res_jac_grad_hes_hesl_funcid(expr, pars_str, consts_str, ndata, dtype)
 
 	sym_expr = sympify(expr)
 	# convert parameter names to ease kernel generation
@@ -269,7 +273,7 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp
 			ctstr = cuprint.tcs_d(s)
 		if ctstr == '0':
 			ctstr = '0.0f'
-		jac_str += '\tjac['+str(k)+'*N+tid] = '+ctstr+';\n'
+		jac_str += '\tjac['+str(k)+'*Nelem+tid] = '+ctstr+';\n'
 
 	hes_str = ""
 	for k in range(round(nparam*(nparam+1)/2)):
@@ -281,7 +285,7 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp
 			ctstr = cuprint.tcs_d(s)
 		if ctstr == '0':
 			ctstr = '0.0f'
-		hes_str += '\thes['+str(k)+'*N+tid] = '+ctstr+'*res[tid];\n'
+		hes_str += '\thes['+str(k)+'*Nelem+tid] = '+ctstr+'*res[tid];\n'
 
 	for k in range(len(pars_str)):
 		p = pars_str[k]
@@ -293,39 +297,42 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp
 
 	for k in range(len(consts_str)):
 		c = consts_str[k]
-		repl = 'consts['+str(k)+'*N+tid]'
+		repl = 'consts['+str(k)+'*Nelem+tid]'
 		sub_str = sub_str.replace(c, repl)
 		eval_str = eval_str.replace(c, repl)
 		jac_str = jac_str.replace(c, repl)
 		hes_str = hes_str.replace(c, repl)
 
 	rjh_kernel = rjh_temp.render(funcid=funcid, fp_type=type,
-		nparam=nparam, nconst=nconst,
+		nparam=nparam, nconst=nconst, ndata=ndata,
 		sub_expr=sub_str, eval_expr=eval_str, jac_expr=jac_str, hes_expr=hes_str)
 
 
 	return rjh_kernel
 
 class ResJacGradHesHesl(CudaFunction):
-	def __init__(self, expr: str, pars_str: list[str], consts_str: list[str], dtype: cp.dtype):
+	def __init__(self, expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
 
 		self.type_str = ctc.type_to_typestr(dtype)
 		self.pars_str = pars_str
 		self.consts_str = consts_str
+		self.ndata = ndata
 
-		self.funcid = res_jac_grad_hes_hesl_funcid(expr, pars_str, consts_str, dtype)
-		self.code = res_jac_grad_hes_hesl_code(expr, pars_str, consts_str, dtype)
+		self.funcid = res_jac_grad_hes_hesl_funcid(expr, pars_str, consts_str, ndata, dtype)
+		self.code = res_jac_grad_hes_hesl_code(expr, pars_str, consts_str, ndata, dtype)
 
 		self.mod = None
 		self.run_func = None
 
-	def run(self, pars, consts, data, lam, res, jac, grad, hes, hesl, N):
+	def run(self, pars, consts, data, lam, res, jac, grad, hes, hesl, Nelem):
 		if self.run_func == None:
 			self.build()
 
+		N = round(Nelem / self.ndata)
+
 		Nthreads = 32
 		blockSize = math.ceil(N / Nthreads)
-		self.run_func((blockSize,),(Nthreads,),(pars, consts, data, lam, res, jac, grad, hes, hesl, N))
+		self.run_func((blockSize,),(Nthreads,),(pars, consts, data, lam, res, jac, grad, hes, hesl, N, Nelem))
 
 	def get_device_funcid(self):
 		return self.funcid
@@ -342,11 +349,11 @@ class ResJacGradHesHesl(CudaFunction):
 """
 extern \"C\" __global__
 void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp_type}}* data, const {{fp_type}}* lam,
-	{{fp_type}}* res, {{fp_type}}* jac, {{fp_type}}* grad, {{fp_type}}* hes, {{fp_type}}* hesl, int N) 
+	{{fp_type}}* res, {{fp_type}}* jac, {{fp_type}}* grad, {{fp_type}}* hes, {{fp_type}}* hesl, int N, int Nelem) 
 {
 	int tid = blockDim.x * blockIdx.x + threadIdx.x;
 	if (tid < N) {
-		{{dfuncid}}(params, consts, data, lam, res, jac, grad, hes, hesl, tid, N);
+		{{dfuncid}}(params, consts, data, lam, res, jac, grad, hes, hesl, tid, N, Nelem);
 	}
 }
 """)
@@ -368,6 +375,105 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp
 
 	def get_deps(self):
 		return list()
+
+
+
+def sum_res_grad_hes_hesl_funcid(nparam: int, ndata: int, dtype: cp.dtype):
+	return 'sum_res_jac_hes_hesl' + ctc.dim_dim_type_funcid(nparam, ndata, dtype)
+
+def sum_res_grad_hes_hesl_code(nparam: int, ndata: int, dtype: cp.dtype):
+	temp = Template(
+"""
+__device__
+void {{funcid}}(const {{fp_type}}* res, const {{fp_type}}* grad, const {{fp_type}}* hes, const {{fp_type}}* hesl,
+	{{fp_type}}* f, {{fp_type}}* g, {{fp_type}}* h, {{fp_type}}* hl, int tid, int N, int Nelem) 
+{
+	int bucket = tid / {{ndata}};
+	atomicAdd(&f[bucket], res[tid]);
+	for (int i = 0; i < {{nparam}}; ++i) {
+		atomicAdd(&g[i*N + bucket], grad[i*Nelem + tid]);
+	}
+	for (int i = 0; i < {{nhes}}; ++i) {
+		int i_nb = i*N + bucket;
+		int i_nt = i*Nelem + tid;
+		atomicAdd(&h[i_nb], hes[i_nt]);
+		atomicAdd(&hl[i_nb], hesl[i_nt]);
+	}
+}
+""")
+
+	type = ctc.type_to_typestr(dtype)
+	funcid = sum_res_grad_hes_hesl_funcid(nparam, ndata, dtype)
+	nhes = round(nparam*(nparam+1)/2)
+	return temp.render(funcid=funcid, fp_type=type, nparam=nparam, nhes=nhes, ndata=ndata)
+
+class SumResGradHesHesl(CudaFunction):
+	def __init__(self, nparam: int, ndata: int, dtype: cp.dtype):
+		
+		self.funcid = sum_res_grad_hes_hesl_funcid(nparam, ndata, dtype)
+		self.code = sum_res_grad_hes_hesl_code(nparam, ndata, dtype)
+
+		self.type_str = ctc.type_to_typestr(dtype)
+		self.nparam = nparam
+		self.ndata = ndata
+		self.dtype = dtype
+
+		self.mod = None
+		self.run_func = None
+
+	def run(self, res, grad, hes, hesl, f, g, h, hl, Nelem):
+		if self.run_func == None:
+			self.build()
+
+		N = round(Nelem / self.ndata)
+
+		Nthreads = 32
+		blockSize = math.ceil(Nelem / Nthreads)
+		self.run_func((blockSize,),(Nthreads,),(res, grad, hes, hesl, f, g, h, hl, N, Nelem))
+
+	def get_device_funcid(self):
+		return self.funcid
+
+	def get_kernel_funcid(self):
+		funcid = self.funcid
+		return 'k_' + funcid
+
+	def get_device_code(self):
+		return self.code
+
+	def get_kernel_code(self):
+		temp = Template(
+"""
+extern \"C\" __global__
+void {{funcid}}(const {{fp_type}}* res, const {{fp_type}}* grad, const {{fp_type}}* hes, const {{fp_type}}* hesl,
+	{{fp_type}}* f, {{fp_type}}* g, {{fp_type}}* h, {{fp_type}}* hl, int N, int Nelem) 
+{
+	int tid = blockDim.x * blockIdx.x + threadIdx.x;
+	if (tid < Nelem) {
+		{{dfuncid}}(res, grad, hes, hesl, f, g, h, hl, tid, N, Nelem);
+	}
+}
+""")
+		fid = self.get_kernel_funcid()
+		dfid = self.get_device_funcid()
+
+		return temp.render(funcid=fid, fp_type=self.type_str, dfuncid=dfid)
+
+	def get_full_code(self):
+		code = self.get_device_code() + '\n'
+		code += self.get_kernel_code()
+		return code
+
+	def build(self):
+		cc = cudap.code_gen_walking(self, "")
+		self.mod = cp.RawModule(code=cc)
+		self.run_func = self.mod.get_function(self.get_kernel_funcid())
+		return cc
+
+	def get_deps(self):
+		return list()
+
+
 
 
 
@@ -454,6 +560,7 @@ void {{funcid}}(const {{fp_type}}* data, {{fp_type}}* eval, {{fp_type}}* hes, in
 
 	def get_deps(self):
 		return list()
+
 
 
 

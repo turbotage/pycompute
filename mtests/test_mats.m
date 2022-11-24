@@ -56,3 +56,28 @@ b = [ 3.1105268  -0.01635835 -0.35105333 -0.33321792];
 A \ b'
 
 
+%%
+b = rand(3,1);
+L = tril(rand(3,3));
+D = zeros(3,3);
+E = zeros(3,3);
+for i=1:length(L)
+    L(i,i) = 1.0;
+    D(i,i) = rand();
+end
+E(1,1) = D(1,1);
+E(3,3) = D(3,3);
+disp(L)
+disp(D)
+disp(E)
+
+A = L*D*L';
+An = L*(D+E)*L';
+
+disp(A)
+disp(An)
+x = A \ b;
+xn = An \ b;
+disp(x)
+disp(xn)
+

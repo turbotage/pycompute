@@ -3,7 +3,7 @@ import cupy as cp
 
 import cuda.cuda_program as cuda_cp
 from cuda.cuda_program import CudaTensor, CudaFunction
-from cuda.symbolic import EvalJacHes, ResJacGradHesHesl, NLSQ_LM
+from cuda.symbolic import EvalJacHes, ResJacGradHesHesl, SumResGradHesHesl, NLSQ_LM
 from cuda.solver import GMW81Solver
 import math
 import time
@@ -27,7 +27,7 @@ def from_cu_tensor(t: CudaTensor, rand=False, zeros=False, ones=False):
 
 	return cp.empty(shape=tuple(t.shape), dtype=t.dtype)
 
-pars = CudaTensor([4, Nelem], cp.float32)
+pars = CudaTensor([4, batch_size], cp.float32)
 pars_t = from_cu_tensor(pars, rand=True)
 
 consts = CudaTensor([nconst, Nelem], cp.float32)
@@ -58,29 +58,39 @@ hes_t = from_cu_tensor(hes)
 hesl = CudaTensor([round(nparam*(nparam+1)/2), Nelem], cp.float32)
 hesl_t = from_cu_tensor(hesl)
 
+fsum = CudaTensor([1, batch_size], cp.float32)
+fsum_t = from_cu_tensor(fsum, zeros=True)
+
+gsum = CudaTensor([nparam, batch_size], cp.float32)
+gsum_t = from_cu_tensor(gsum, zeros=True)
+
+hsum = CudaTensor([round(nparam*(nparam+1)/2), batch_size], cp.float32)
+hsum_t = from_cu_tensor(hsum, zeros=True)
+
+hlsum = CudaTensor([round(nparam*(nparam+1)/2), batch_size], cp.float32)
+hlsum_t = from_cu_tensor(hlsum, zeros=True)
+
 expr = 'S0*(f*exp(-b*D_1)+(1-f)*exp(-b*D_2))'
 pars_str = ['S0', 'f', 'D_1', 'D_2']
 consts_str = ['b']
 
-rjghhl = ResJacGradHesHesl(expr, pars_str, consts_str, cp.float32)
+rjghhl = ResJacGradHesHesl(expr, pars_str, consts_str, ndata, cp.float32)
 rjghhl_code = cuda_cp.code_gen_walking(rjghhl, "")
 
 with open("bk_res_jac_grad_hes_hesl.cu", "w") as f:
 	f.write(rjghhl.build())
+
+summer = SumResGradHesHesl(nparam, ndata, cp.float32)
+summer_code = cuda_cp.code_gen_walking(summer, "")
+
+with open("bk_summer.cu", "w") as f:
+	f.write(summer.build())
 
 gmw81sol = GMW81Solver(nparam, cp.float32)
 gmw81sol_code = cuda_cp.code_gen_walking(gmw81sol, "")
 
 with open("bk_gmw81sol.cu", "w") as f:
 	f.write(gmw81sol.build())
-
-
-print('Before kernel')
-start = time.time()
-
-hsum = None
-hlsum = None
-gsum = None
 
 Amat = None
 bvec = None
@@ -116,55 +126,45 @@ def compact_to_LD(mat):
 			k += 1
 	return (L,D)
 
-for i in range(0,1):
+start = time.time()
+for i in range(0,100):
 	rjghhl.run(pars_t, consts_t, data_t, lam_t, res_t, jac_t, grad_t, hes_t, hesl_t, Nelem)
-	(hsum, hlsum, gsum) = NLSQ_LM.compact_rjghhl(ndata, grad_t, hes_t, hesl_t)
-	cp.cuda.stream.get_current_stream().synchronize()
-	#print(hlsum[:,0])
-	#print('\nbefore run:')
-	Amat = compact_to_full(hlsum[:,0])
-	bvec = -gsum[:,0]
-
-	gmw81sol.run(hlsum, -gsum, step_t, batch_size)
-	cp.cuda.stream.get_current_stream().synchronize()
-	#print('\nafter run')
-	#print(hlsum[:,0])
-	Lmat, Dmat = compact_to_LD(hlsum[:,0])
-
-print('Solutions: ')
-print(cp.linalg.solve(Amat, bvec))
-print(cp.linalg.solve(Lmat @ Dmat @ Lmat.transpose(), bvec))
-print(step_t[:,0])
-
-#print(Amat)
-#print(bvec)
-print('LD')
-print(Lmat)
-print(Dmat)
-
-print('Eigenvalues: ')
-print(cp.linalg.eigvalsh(Amat))
-print(cp.linalg.eigvalsh(Lmat @ Dmat @ Lmat.transpose()))
-
-print('Matrices: ')
-print(Amat) 
-print(Lmat @ Dmat @ Lmat.transpose())
-print(Lmat @ Dmat @ Lmat.transpose() - Amat)
-
-#print(A)
-#print(L @ D @ L.transpose())
-
+	summer.run(res_t, grad_t, hes_t, hesl_t, fsum_t, gsum_t, hsum_t, hlsum_t, Nelem)
+	gmw81sol.run(hlsum_t, -gsum_t, step_t, batch_size)
+	pars_t += step_t
 
 
 cp.cuda.stream.get_current_stream().synchronize()
 end = time.time()
 print('It took: ' + str(end - start) + ' s')
 
+printing1 = False
+if printing1:
+	print('Solutions: ')
+	print(cp.linalg.solve(Amat, bvec))
+	print(cp.linalg.solve(Lmat @ Dmat @ Lmat.transpose(), bvec))
+	print(step_t[:,0])
+
+	print('LD')
+	print(Lmat)
+	print(Dmat)
+
+	print('Eigenvalues: ')
+	print(cp.linalg.eigvalsh(Amat))
+	print(cp.linalg.eigvalsh(Lmat @ Dmat @ Lmat.transpose()))
+
+	print('Matrices: ')
+	print(Amat) 
+	print(Lmat @ Dmat @ Lmat.transpose())
+	print(Lmat @ Dmat @ Lmat.transpose() - Amat)
+
+cp.cuda.stream.get_current_stream().synchronize()
+
 
 
 ns = [0, batch_size - 1]
-printing=False
-if printing:
+printing2=False
+if printing2:
 	for ni in ns:
 		print('Show Iter: ')
 		pt = pars_t[:,ni]

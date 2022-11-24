@@ -17,6 +17,7 @@ from . import linalg
 def gmw81_funcid(ndim: int, dtype: cp.dtype):
 	return 'gmw81' + ctc.dim_type_funcid(ndim, dtype)
 
+
 # def gmw81_code(ndim: int, dtype: cp.dtype):
 # 	codestr = Template(
 # """
@@ -115,6 +116,7 @@ def gmw81_funcid(ndim: int, dtype: cp.dtype):
 # 	return codestr.render(funcid=funcid, fp_type=type, ndim=ndim,
 # 		abs_func=abs_func, sqrt_func=sqrt_func, machine_eps=machine_eps)
 
+
 def gmw81_code(ndim: int, dtype: cp.dtype):
 	codestr = Template(
 """
@@ -125,19 +127,16 @@ void {{funcid}}({{fp_type}}* mat) {
 	{{fp_type}} t2 = 0.0f; // nu
 	{{fp_type}} beta2 = {{machine_eps}};
 	{{fp_type}} delta = {{machine_eps}};
-	{{fp_type}} arr[{{ndim}}];
 
 	for (int i = 0; i < {{ndim}}; ++i) {
 		for (int j = 0; j <= i; ++j) {
-			t0 = {{abs_func}}(mat[i*{{ndim}}+i]);
+			t0 = {{abs_func}}(mat[i*{{ndim}}+j]);
 			if (i == j) {
-				if (t0 > t1) {
+				if (t0 > t1)
 					t1 = t0;
-				}
 			} else {
-				if (t0 > t2) {
+				if (t0 > t2)
 					t2 = t0;
-				}
 			}
 		}
 	}
@@ -146,51 +145,47 @@ void {{funcid}}({{fp_type}}* mat) {
 		t2 /= {{sqrt_func}}({{ndim}}*{{ndim}} - 1);
 	}
 
-
-	if (beta2 < t1) {
+	if (beta2 < t1)
 		beta2 = t1;
-	}
-	if (beta2 < t2) {
+	if (beta2 < t2)
 		beta2 = t2;
-	}
 	t0 = t1 + t2;
-	if (t0 > 1.0) {
+	if (t0 > 1.0f)
 		delta *= t0;
-	}
 	// delta = eps*max(gamma + nu, 1)
 	// beta2 = max(gamma, nu/sqrt(n^^2-1), eps)
 
-	for (int i = 0; i < {{ndim}}; ++i) {
-		{{fp_type}} d = {{abs_type}}(mat[i*{{ndim}}+i]);
+	for (int j = 0; j < {{ndim}}; ++j) { // compute column j
+		
+		for (int s = 0; s < j; ++s)
+			mat[j*{{ndim}}+s] /= mat[s*{{ndim}}+s];
+		for (int i = j + 1; i < {{ndim}}; ++i) {
+			t0 = mat[i*{{ndim}}+j];
+			for (int s = 0; s < j; ++s)
+				t0 -= mat[j*{{ndim}}+s] * mat[i*{{ndim}}+s];
+			mat[i*{{ndim}}+j] = t0;
+		}
 
 		t1 = 0.0f;
-		for (int j = i + 1; j < {{ndim}}; ++j) {
-			t0 = {{abs_func}}(mat[j*{{ndim}}+i]);
-			if (t1 < t0) {
+		for (int i = j + 1; i < {{ndim}}; ++i) {
+			t0 = {{abs_func}}(mat[i*{{ndim}}+j]);
+			if (t1 < t0)
 				t1 = t0;
-			}
 		}
-		t1 *= t1; // t1 holds theta
+		t1 *= t1;
 
+		t2 = {{abs_func}}(mat[j*{{ndim}}+j]);
+		if (t2 < delta)
+			t2 = delta;
 		t0 = t1 / beta2;
-		if (d < t0) {
-			d = t0;
-		}
-		if (d < delta) {
-			d = delta;
-		}
+		if (t2 < t0)
+			t2 = t0;
+		mat[j*{{ndim}}+j] = t2;
 
-		mat[i*{{ndim}}+i] = d;
-
-		for (int j = i + 1; j < {{ndim}}; ++j) {
-			int ji = j*{{ndim}}+i;
-			arr[j] = mat[ji];
-			mat[ji] /= d;
-		}
-
-		for (int j = i + 1; j < {{ndim}}; ++j) {
-			for (int k = j; k < {{ndim}}; ++k) {
-				mat[k*{{ndim}}+j] -= arr[j] * mat[k*{{ndim}}+i];
+		if (j < {{ndim}}) {
+			for (int i = j + 1; i < {{ndim}}; ++i) {
+				t0 = mat[i*{{ndim}}+j];
+				mat[i*{{ndim}}+i] -= t0*t0/t2;
 			}
 		}
 
@@ -417,15 +412,15 @@ def gmw81_solver_code(ndim: int, dtype: cp.dtype):
 """
 __device__
 void {{funcid}}({{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol) {
-	//int perm[{{ndim}}];
-	//{{fp_type}} arr1[{{ndim}}];
-	//{{fp_type}} arr2[{{ndim}}];
-	//{{diag_pivot_funcid}}(mat, perm);
+	int perm[{{ndim}}];
+	{{fp_type}} arr1[{{ndim}}];
+	{{fp_type}} arr2[{{ndim}}];
+	{{diag_pivot_funcid}}(mat, perm);
 	{{gmw81_funcid}}(mat);
-	//{{permute_vec_funcid}}(rhs, perm, arr1);
-	//{{ldl_solve_funcid}}(mat, arr1, arr2);
-	{{ldl_solve_funcid}}(mat, rhs, sol);
-	//{{inv_permute_vec_funcid}}(arr2, perm, sol);
+	{{permute_vec_funcid}}(rhs, perm, arr1);
+	{{ldl_solve_funcid}}(mat, arr1, arr2);
+	//{{ldl_solve_funcid}}(mat, rhs, sol);
+	{{inv_permute_vec_funcid}}(arr2, perm, sol);
 }
 """)
 
