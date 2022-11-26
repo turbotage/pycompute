@@ -20,8 +20,275 @@ def eval_funcid(expr: str, pars_str: list[str], consts_str: list[str], ndata: in
 		dtype, 'eval') + '_' + util.expr_hash(expr, 12)
 
 def eval_code(expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
-	return 'eval' + ctc.dim_dim_dim_type_funcid(len(pars_str), len(consts_str), ndata,
-		dtype, 'eval') + '_' + util.expr_hash(expr, 12))
+	rjh_temp = Template(
+"""
+__device__
+void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, {{fp_type}}* eval, 
+	{{fp_type}}* jac, {{fp_type}}* hes, int tid, int N, int Nelem) 
+{
+	{{fp_type}} pars[{{nparam}}];
+	int bucket = tid / {{ndata}};
+	for (int i = 0; i < {{nparam}}; ++i) {
+		pars[i] = params[i*N+bucket];
+	}
+
+{{sub_expr}}
+
+{{eval_expr}}
+
+}
+""")
+
+	type = ctc.check_fp32_or_fp64(CudaTensor(None, dtype), 'eval')
+
+	nparam = len(pars_str)
+	nconst = len(consts_str)
+
+	funcid = eval_funcid(expr, pars_str, consts_str, ndata, dtype)
+
+	sym_expr = sympify(expr)
+	# convert parameter names to ease kernel generation
+	for k in range(0,len(pars_str)):
+		temp = pars_str[k]
+		pars_str[k] = 'parvar_' + temp
+		sym_expr = sym_expr.subs(temp, pars_str[k])
+
+	for k in range(0,len(consts_str)):
+		temp = consts_str[k]
+		consts_str[k] = 'convar_' + temp
+		sym_expr = sym_expr.subs(temp, consts_str[k])
+
+	substs, reduced = util.res(str(sym_expr), pars_str, consts_str)
+	cuprint = util.CUDAPrinter()
+
+	sub_str = ""
+	for s in substs:
+		sub_str += '\t'+type+' '+cuprint.tcs_f(s[0])+' = '+cuprint.tcs_f(s[1])+';\n'
+
+	eval_str = '\teval[tid] = '+cuprint.tcs_f(reduced[0])+';'
+
+	for k in range(len(pars_str)):
+		p = pars_str[k]
+		repl = 'pars['+str(k)+']'
+		sub_str = sub_str.replace(p, repl)
+		eval_str = eval_str.replace(p, repl)
+
+	for k in range(len(consts_str)):
+		c = consts_str[k]
+		repl = 'consts['+str(k)+'*Nelem+tid]'
+		sub_str = sub_str.replace(c, repl)
+		eval_str = eval_str.replace(c, repl)
+
+	rjh_kernel = rjh_temp.render(funcid=funcid, fp_type=type,
+		nparam=nparam, nconst=nconst,
+		sub_expr=sub_str, eval_expr=eval_str)
+
+
+	return rjh_kernel
+
+class Eval(CudaFunction):
+	def __init__(self, expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
+
+		self.type_str = ctc.type_to_typestr(dtype)
+		self.pars_str = pars_str
+		self.consts_str = consts_str
+		self.ndata = ndata
+
+		self.funcid = eval_funcid(expr, pars_str, consts_str, ndata, dtype)
+		self.code = eval_code(expr, pars_str, consts_str, ndata, dtype)
+
+		self.mod = None
+		self.run_func = None
+
+	def run(self, pars, consts, eval, jac, hes, Nelem):
+		if self.run_func == None:
+			self.build()
+
+		N = round(Nelem / self.ndata)
+
+		Nthreads = 32
+		blockSize = np.ceil(N / Nthreads)
+		self.run_func((blockSize,),(Nthreads,),(pars, consts, eval, jac, hes, N, Nelem))
+
+	def get_device_funcid(self):
+		return self.funcid
+
+	def get_kernel_funcid(self):
+		funcid = self.funcid
+		return 'k_' + funcid
+
+	def get_device_code(self):
+		return self.code
+
+	def get_kernel_code(self):
+		temp = Template(
+"""
+extern \"C\" __global__
+void {{funcid}}(const {{fp_type}}* pars, const {{fp_type}}* consts,
+	{{fp_type}}* eval, int N, int Nelem) 
+{
+	int tid = blockDim.x * blockIdx.x + threadIdx.x;
+	if (tid < N) {
+		{{dfuncid}}(pars, consts, eval, jac, hes, tid, N, Nelem);
+	}
+}
+""")
+		fid = self.get_kernel_funcid()
+		dfid = self.get_device_funcid()
+
+		return temp.render(funcid=fid, dfuncid=dfid, fp_type=self.type_str)
+
+	def get_full_code(self):
+		code = self.get_device_code() + '\n'
+		code += self.get_kernel_code()
+		return code
+
+	def build(self):
+		cc = cudap.code_gen_walking(self, "")
+		self.mod = cp.RawModule(code=cc)
+		self.run_func = self.mod.get_function(self.get_kernel_funcid())
+		return cc
+
+	def get_deps(self):
+		return list()
+
+
+def res_funcid(expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
+	return 'res' + ctc.dim_dim_dim_type_funcid(len(pars_str), len(consts_str), ndata,
+		dtype, 'res') + '_' + util.expr_hash(expr, 12)
+
+def res_code(expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
+	rjh_temp = Template(
+"""
+__device__
+void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp_type}}* data,
+	{{fp_type}}* eval, {{fp_type}}* jac, {{fp_type}}* hes, int tid, int N, int Nelem) 
+{
+	{{fp_type}} pars[{{nparam}}];
+	int bucket = tid / {{ndata}};
+	for (int i = 0; i < {{nparam}}; ++i) {
+		pars[i] = params[i*N+bucket];
+	}
+
+{{sub_expr}}
+
+{{res_expr}}
+
+}
+""")
+
+	type = ctc.check_fp32_or_fp64(CudaTensor(None, dtype), 'res')
+
+	nparam = len(pars_str)
+	nconst = len(consts_str)
+
+	funcid = res_funcid(expr, pars_str, consts_str, ndata, dtype)
+
+	sym_expr = sympify(expr)
+	# convert parameter names to ease kernel generation
+	for k in range(0,len(pars_str)):
+		temp = pars_str[k]
+		pars_str[k] = 'parvar_' + temp
+		sym_expr = sym_expr.subs(temp, pars_str[k])
+
+	for k in range(0,len(consts_str)):
+		temp = consts_str[k]
+		consts_str[k] = 'convar_' + temp
+		sym_expr = sym_expr.subs(temp, consts_str[k])
+
+	substs, reduced = util.res(str(sym_expr), pars_str, consts_str)
+	cuprint = util.CUDAPrinter()
+
+	sub_str = ""
+	for s in substs:
+		sub_str += '\t'+type+' '+cuprint.tcs_f(s[0])+' = '+cuprint.tcs_f(s[1])+';\n'
+
+	eval_str = '\tres[tid] = '+cuprint.tcs_f(reduced[0])+'-data[i];'
+
+	for k in range(len(pars_str)):
+		p = pars_str[k]
+		repl = 'pars['+str(k)+']'
+		sub_str = sub_str.replace(p, repl)
+		eval_str = eval_str.replace(p, repl)
+
+	for k in range(len(consts_str)):
+		c = consts_str[k]
+		repl = 'consts['+str(k)+'*Nelem+tid]'
+		sub_str = sub_str.replace(c, repl)
+		eval_str = eval_str.replace(c, repl)
+
+	rjh_kernel = rjh_temp.render(funcid=funcid, fp_type=type,
+		nparam=nparam, nconst=nconst,
+		sub_expr=sub_str, eval_expr=eval_str)
+
+
+	return rjh_kernel
+
+class Res(CudaFunction):
+	def __init__(self, expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
+
+		self.type_str = ctc.type_to_typestr(dtype)
+		self.pars_str = pars_str
+		self.consts_str = consts_str
+		self.ndata = ndata
+
+		self.funcid = eval_funcid(expr, pars_str, consts_str, ndata, dtype)
+		self.code = eval_code(expr, pars_str, consts_str, ndata, dtype)
+
+		self.mod = None
+		self.run_func = None
+
+	def run(self, pars, consts, eval, jac, hes, Nelem):
+		if self.run_func == None:
+			self.build()
+
+		N = round(Nelem / self.ndata)
+
+		Nthreads = 32
+		blockSize = np.ceil(N / Nthreads)
+		self.run_func((blockSize,),(Nthreads,),(pars, consts, eval, jac, hes, N, Nelem))
+
+	def get_device_funcid(self):
+		return self.funcid
+
+	def get_kernel_funcid(self):
+		funcid = self.funcid
+		return 'k_' + funcid
+
+	def get_device_code(self):
+		return self.code
+
+	def get_kernel_code(self):
+		temp = Template(
+"""
+extern \"C\" __global__
+void {{funcid}}(const {{fp_type}}* pars, const {{fp_type}}* consts,
+	{{fp_type}}* res, int N, int Nelem) 
+{
+	int tid = blockDim.x * blockIdx.x + threadIdx.x;
+	if (tid < N) {
+		{{dfuncid}}(pars, consts, res, jac, hes, tid, N, Nelem);
+	}
+}
+""")
+		fid = self.get_kernel_funcid()
+		dfid = self.get_device_funcid()
+
+		return temp.render(funcid=fid, dfuncid=dfid, fp_type=self.type_str)
+
+	def get_full_code(self):
+		code = self.get_device_code() + '\n'
+		code += self.get_kernel_code()
+		return code
+
+	def build(self):
+		cc = cudap.code_gen_walking(self, "")
+		self.mod = cp.RawModule(code=cc)
+		self.run_func = self.mod.get_function(self.get_kernel_funcid())
+		return cc
+
+	def get_deps(self):
+		return list()
 
 
 def eval_jac_hes_funcid(expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
@@ -193,7 +460,6 @@ void {{funcid}}(const {{fp_type}}* pars, const {{fp_type}}* consts,
 
 	def get_deps(self):
 		return list()
-
 
 
 def res_jac_grad_hes_hesl_funcid(expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
@@ -386,7 +652,6 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp
 		return list()
 
 
-
 def sum_res_grad_hes_hesl_funcid(nparam: int, ndata: int, dtype: cp.dtype):
 	return 'sum_res_jac_hes_hesl' + ctc.dim_dim_type_funcid(nparam, ndata, dtype)
 
@@ -398,9 +663,10 @@ void {{funcid}}(const {{fp_type}}* res, const {{fp_type}}* grad, const {{fp_type
 	{{fp_type}}* f, {{fp_type}}* g, {{fp_type}}* h, {{fp_type}}* hl, int tid, int N, int Nelem) 
 {
 	int bucket = tid / {{ndata}};
-	atomicAdd(&f[bucket], res[tid]);
+	float rtid = res[tid];
+	atomicAdd(&f[bucket], rtid*rtid);
 	for (int i = 0; i < {{nparam}}; ++i) {
-		atomicAdd(&g[i*N + bucket], grad[i*Nelem + tid]);
+		atomicAdd(&g[i*N + bucket], grad[i*Nelem+tid]);
 	}
 	for (int i = 0; i < {{nhes}}; ++i) {
 		int i_nb = i*N + bucket;
@@ -483,107 +749,4 @@ void {{funcid}}(const {{fp_type}}* res, const {{fp_type}}* grad, const {{fp_type
 		return list()
 
 
-
-
-
-def res_hes_funcid(nparam: int, dtype: cp.dtype):
-	return 'res_hes' + ctc.dim_type_funcid(nparam, dtype)
-
-def res_hes_code(nparam: int, dtype: cp.dtype):
-	
-	rjh_temp = Template(
-"""
-__device__
-void {{funcid}}(const {{fp_type}}* data, {{fp_type}}* eval, {{fp_type}}* hes, int tid, int N) 
-{
-	eval[tid] -= data[tid];
-
-	for (int i = 0; i < {{nhes}}; ++i) {
-		hes[i*N+tid] = hes[i*N+tid] * eval[tid];
-	}
-}
-""")
-
-	type = ctc.check_fp32_or_fp64(CudaTensor(None, dtype), 'res_hes')
-	funcid = res_hes_funcid(nparam, dtype)
-	nhes = round(nparam*(nparam+1)/2)
-
-	rjh_kernel = rjh_temp.render(funcid=funcid, fp_type=type, nhes=nhes)
-	return rjh_kernel
-
-class ResHes(CudaFunction):
-	def __init__(self, nparam: int, dtype: cp.dtype):
-		
-		self.funcid = res_hes_funcid(nparam, dtype)
-		self.code = res_hes_code(nparam, dtype)
-
-		self.type_str = ctc.type_to_typestr(dtype)
-
-		self.mod = None
-		self.run_func = None
-
-	def run(self, pars, consts, eval, jac, hes, N):
-		if self.run_func == None:
-			self.build()
-		Nthreads = 32
-		blockSize = np.ceil(N / Nthreads)
-		self.run_func((blockSize,),(Nthreads,),(pars, consts, eval, jac, hes, N))
-
-	def get_device_funcid(self):
-		return self.funcid
-
-	def get_kernel_funcid(self):
-		funcid = self.funcid
-		return 'k_' + funcid
-
-	def get_device_code(self):
-		return self.code
-
-	def get_kernel_code(self):
-		temp = Template(
-"""
-extern \"C\" __global__
-void {{funcid}}(const {{fp_type}}* data, {{fp_type}}* eval, {{fp_type}}* hes, int N) 
-{
-	int tid = blockDim.x * blockIdx.x + threadIdx.x;
-	if (tid < N) {
-		{{dfuncid}}(data, eval, hes, tid, N);
-	}
-}
-""")
-		fid = self.get_kernel_funcid()
-		dfid = self.get_device_funcid()
-
-		return temp.render(funcid=fid, dfuncid=dfid)
-
-	def get_full_code(self):
-		code = self.get_device_code() + '\n'
-		code += self.get_kernel_code()
-		return code
-
-	def build(self):
-		cc = cudap.code_gen_walking(self, "")
-		self.mod = cp.RawModule(code=cc)
-		self.run_func = self.mod.get_function(self.get_kernel_funcid())
-		return cc
-
-	def get_deps(self):
-		return list()
-
-
-
-
-class NLSQ_LM:
-	
-	@staticmethod
-	def compact_rjghhl(ndata: int, grad, hes, hesl):
-		N = round(grad.shape[1] / ndata)
-		nparam = grad.shape[0]
-		nhes = round(nparam*(nparam+1)/2)
-		hsum = hes.transpose().reshape(N,ndata,nhes).sum(axis=1).transpose()
-		hlsum = hesl.transpose().reshape(N,ndata,nhes).sum(axis=1).transpose()
-		gsum = grad.transpose().reshape(N,ndata,nparam).sum(axis=1).transpose()
-		return (cp.ascontiguousarray(hsum), cp.ascontiguousarray(hlsum), cp.ascontiguousarray(gsum))
-
-	
 
