@@ -153,11 +153,11 @@ void {{funcid}}(const {{fp_type}}* pars, const {{fp_type}}* consts,
 		return list()
 
 
-def res_funcid(expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
+def resf_funcid(expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
 	return 'res' + ctc.dim_dim_dim_type_funcid(len(pars_str), len(consts_str), ndata,
 		dtype, 'res') + '_' + util.expr_hash(expr, 12)
 
-def res_code(expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
+def resf_code(expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
 	rjh_temp = Template(
 """
 __device__
@@ -173,7 +173,8 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp
 {{sub_expr}}
 
 {{res_expr}}
-
+	res[tid] = rtid;
+	atomicAdd(&f[bucket], rtid*rtid);
 }
 """)
 
@@ -182,7 +183,7 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp
 	nparam = len(pars_str)
 	nconst = len(consts_str)
 
-	funcid = res_funcid(expr, pars_str, consts_str, ndata, dtype)
+	funcid = resf_funcid(expr, pars_str, consts_str, ndata, dtype)
 
 	sym_expr = sympify(expr)
 	# convert parameter names to ease kernel generation
@@ -203,28 +204,28 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp
 	for s in substs:
 		sub_str += '\t'+type+' '+cuprint.tcs_f(s[0])+' = '+cuprint.tcs_f(s[1])+';\n'
 
-	eval_str = '\tres[tid] = '+cuprint.tcs_f(reduced[0])+'-data[i];'
+	res_str = '\tfloat rtid = '+cuprint.tcs_f(reduced[0])+'-data[i];'
 
 	for k in range(len(pars_str)):
 		p = pars_str[k]
 		repl = 'pars['+str(k)+']'
 		sub_str = sub_str.replace(p, repl)
-		eval_str = eval_str.replace(p, repl)
+		res_str = res_str.replace(p, repl)
 
 	for k in range(len(consts_str)):
 		c = consts_str[k]
 		repl = 'consts['+str(k)+'*Nelem+tid]'
 		sub_str = sub_str.replace(c, repl)
-		eval_str = eval_str.replace(c, repl)
+		res_str = res_str.replace(c, repl)
 
 	rjh_kernel = rjh_temp.render(funcid=funcid, fp_type=type,
 		nparam=nparam, nconst=nconst,
-		sub_expr=sub_str, eval_expr=eval_str)
+		sub_expr=sub_str, res_str=res_str)
 
 
 	return rjh_kernel
 
-class Res(CudaFunction):
+class ResF(CudaFunction):
 	def __init__(self, expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
 
 		self.type_str = ctc.type_to_typestr(dtype)
@@ -238,7 +239,7 @@ class Res(CudaFunction):
 		self.mod = None
 		self.run_func = None
 
-	def run(self, pars, consts, eval, jac, hes, Nelem):
+	def run(self, pars, consts, data, res, ftp, Nelem):
 		if self.run_func == None:
 			self.build()
 
@@ -246,7 +247,7 @@ class Res(CudaFunction):
 
 		Nthreads = 32
 		blockSize = np.ceil(N / Nthreads)
-		self.run_func((blockSize,),(Nthreads,),(pars, consts, eval, jac, hes, N, Nelem))
+		self.run_func((blockSize,),(Nthreads,),(pars, consts, data, res, ftp, N, Nelem))
 
 	def get_device_funcid(self):
 		return self.funcid
@@ -749,4 +750,123 @@ void {{funcid}}(const {{fp_type}}* res, const {{fp_type}}* grad, const {{fp_type
 		return list()
 
 
+def gain_ratio_step_funcid(nparam: int, dtype: cp.dtype):
+	return 'gain_ratio_step' + ctc.dim_type_funcid(nparam, dtype)
 
+def gain_ratio_step_code(nparam: int, dtype: cp.dtype):
+	temp = Template(
+"""
+__device__
+void {{funcid}}(const {{fp_type}}* f, const {{fp_type}}* ftp, const {{fp_type}}* pars_tp, const {{fp_type}}* step,
+	const {{fp_type}}* g, const {{fp_type}}* h, {{fp_type}}* pars, 
+	{{fp_type}}* lam, int8* step_type, {{fp_type}} mu, {{fp_type}} eta, {{fp_type}} acc, {{fp_type}} dec, int tid, int N) 
+{
+	{{fp_type}} actual = f[tid] - ftp[tid];
+	{{fp_type}} predicted = 0.0f;
+
+	int k = 0;
+	for (int i = 0; i < {{nparam}}; ++i) {
+		for (int j = 0; j <= i; ++j) {
+			float entry = h[k] * step[i] * step[j];
+			if (i != j) {
+				predicted += entry;
+			} else {
+				predicted += 2.0f * entry;
+			}
+		}
+	}
+	predicted *= 0.5f;
+
+	for (int i = 0; i < {{nparam}}; ++i) {
+		predicted += step[i] * g[i];
+	}
+
+	{{fp_type}} rho = actual / predicted;
+
+	if (rho > mu && actual > 0) {
+		for (int i = 0; i < {{nparam}}; ++i) {
+			pars[i*N+tid] = pars_tp[i*N+tid];
+		}
+		if (rho > eta) {
+			lam[tid] /= acc;
+			step_type[tid] = 1;
+		} else {
+			step_type[tid] = 2;
+		}
+	} else {
+		lam[tid] *= dec;
+		step_type[tid] = 4;
+	}
+
+}
+""")
+
+	type = ctc.type_to_typestr(dtype)
+	funcid = gain_ratio_step_funcid(nparam, dtype)
+	nhes = round(nparam*(nparam+1)/2)
+	return temp.render(funcid=funcid, fp_type=type, nparam=nparam, nhes=nhes, ndata=ndata)
+
+class SumResGradHesHesl(CudaFunction):
+	def __init__(self, nparam: int, dtype: cp.dtype):
+		
+		self.funcid = gain_ratio_step_funcid(nparam, dtype)
+		self.code = sum_res_grad_hes_hesl_code(nparam, dtype)
+
+		self.type_str = ctc.type_to_typestr(dtype)
+		self.nparam = nparam
+		self.dtype = dtype
+
+		self.mod = None
+		self.run_func = None
+
+	def run(self, ):
+		if self.run_func == None:
+			self.build()
+
+		N = round(Nelem / self.ndata)
+
+		Nthreads = 32
+		blockSize = math.ceil(Nelem / Nthreads)
+		self.run_func((blockSize,),(Nthreads,),(res, grad, hes, hesl, f, g, h, hl, N, Nelem))
+
+	def get_device_funcid(self):
+		return self.funcid
+
+	def get_kernel_funcid(self):
+		funcid = self.funcid
+		return 'k_' + funcid
+
+	def get_device_code(self):
+		return self.code
+
+	def get_kernel_code(self):
+		temp = Template(
+"""
+extern \"C\" __global__
+void {{funcid}}(const {{fp_type}}* res, const {{fp_type}}* grad, const {{fp_type}}* hes, const {{fp_type}}* hesl,
+	{{fp_type}}* f, {{fp_type}}* g, {{fp_type}}* h, {{fp_type}}* hl, int N, int Nelem) 
+{
+	int tid = blockDim.x * blockIdx.x + threadIdx.x;
+	if (tid < Nelem) {
+		{{dfuncid}}(res, grad, hes, hesl, f, g, h, hl, tid, N, Nelem);
+	}
+}
+""")
+		fid = self.get_kernel_funcid()
+		dfid = self.get_device_funcid()
+
+		return temp.render(funcid=fid, fp_type=self.type_str, dfuncid=dfid)
+
+	def get_full_code(self):
+		code = self.get_device_code() + '\n'
+		code += self.get_kernel_code()
+		return code
+
+	def build(self):
+		cc = cudap.code_gen_walking(self, "")
+		self.mod = cp.RawModule(code=cc)
+		self.run_func = self.mod.get_function(self.get_kernel_funcid())
+		return cc
+
+	def get_deps(self):
+		return list()

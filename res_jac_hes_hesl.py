@@ -3,7 +3,7 @@ import cupy as cp
 
 import cuda.cuda_program as cuda_cp
 from cuda.cuda_program import CudaTensor, CudaFunction
-from cuda.symbolic import EvalJacHes, ResJacGradHesHesl, SumResGradHesHesl, NLSQ_LM
+from cuda.symbolic import EvalJacHes, ResJacGradHesHesl, SumResGradHesHesl, ResF
 from cuda.solver import GMW81Solver
 import math
 import time
@@ -61,6 +61,9 @@ hesl_t = from_cu_tensor(hesl)
 fsum = CudaTensor([1, batch_size], cp.float32)
 fsum_t = from_cu_tensor(fsum, zeros=True)
 
+fsum2 = CudaTensor([1, batch_size], cp.float32)
+fsum2_t = from_cu_tensor(fsum2, zeros=True)
+
 gsum = CudaTensor([nparam, batch_size], cp.float32)
 gsum_t = from_cu_tensor(gsum, zeros=True)
 
@@ -74,23 +77,21 @@ expr = 'S0*(f*exp(-b*D_1)+(1-f)*exp(-b*D_2))'
 pars_str = ['S0', 'f', 'D_1', 'D_2']
 consts_str = ['b']
 
-rjghhl = ResJacGradHesHesl(expr, pars_str, consts_str, ndata, cp.float32)
-rjghhl_code = cuda_cp.code_gen_walking(rjghhl, "")
-
+rjghhlcu = ResJacGradHesHesl(expr, pars_str, consts_str, ndata, cp.float32)
 with open("bk_res_jac_grad_hes_hesl.cu", "w") as f:
-	f.write(rjghhl.build())
+	f.write(rjghhlcu.build())
 
-summer = SumResGradHesHesl(nparam, ndata, cp.float32)
-summer_code = cuda_cp.code_gen_walking(summer, "")
-
+summercu = SumResGradHesHesl(nparam, ndata, cp.float32)
 with open("bk_summer.cu", "w") as f:
-	f.write(summer.build())
+	f.write(summercu.build())
 
-gmw81sol = GMW81Solver(nparam, cp.float32)
-gmw81sol_code = cuda_cp.code_gen_walking(gmw81sol, "")
-
+gmw81solcu = GMW81Solver(nparam, cp.float32)
 with open("bk_gmw81sol.cu", "w") as f:
-	f.write(gmw81sol.build())
+	f.write(gmw81solcu.build())
+
+rescu = ResF(expr, pars_str, consts_str, ndata, cp.float32)
+with open("bk_res.cu", "w") as f:
+	f.write(rescu.build())
 
 Amat = None
 bvec = None
@@ -128,10 +129,16 @@ def compact_to_LD(mat):
 
 start = time.time()
 for i in range(0,100):
-	rjghhl.run(pars_t, consts_t, data_t, lam_t, res_t, jac_t, grad_t, hes_t, hesl_t, Nelem)
-	summer.run(res_t, grad_t, hes_t, hesl_t, fsum_t, gsum_t, hsum_t, hlsum_t, Nelem)
-	gmw81sol.run(hlsum_t, -gsum_t, step_t, batch_size)
-	pars_t += step_t
+	fsum_t[:,:] = 0.0
+	fsum2_t[:,:] = 0.0
+
+	rjghhlcu.run(pars_t, consts_t, data_t, lam_t, res_t, jac_t, grad_t, hes_t, hesl_t, Nelem)
+	summercu.run(res_t, grad_t, hes_t, hesl_t, fsum_t, gsum_t, hsum_t, hlsum_t, Nelem)
+	gmw81solcu.run(hlsum_t, -gsum_t, step_t, batch_size)
+	tp_step = pars_t + step_t
+	rescu.run(tp_step, consts_t, data_t, res_t, fsum2_t)
+
+	
 
 
 cp.cuda.stream.get_current_stream().synchronize()
