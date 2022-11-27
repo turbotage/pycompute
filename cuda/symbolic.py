@@ -767,18 +767,19 @@ void {{funcid}}(const {{fp_type}}* f, const {{fp_type}}* ftp, const {{fp_type}}*
 	int k = 0;
 	for (int i = 0; i < {{nparam}}; ++i) {
 		for (int j = 0; j <= i; ++j) {
-			float entry = h[k] * step[i] * step[j];
+			float entry = h[k*N+tid] * step[i*N+tid] * step[j*N+tid];
 			if (i != j) {
 				predicted += entry;
 			} else {
 				predicted += 2.0f * entry;
 			}
+			++k;
 		}
 	}
 	predicted *= 0.5f;
 
 	for (int i = 0; i < {{nparam}}; ++i) {
-		predicted += step[i] * g[i];
+		predicted += step[i*N+tid] * g[i*N+tid];
 	}
 
 	{{fp_type}} rho = actual / predicted;
@@ -798,19 +799,23 @@ void {{funcid}}(const {{fp_type}}* f, const {{fp_type}}* ftp, const {{fp_type}}*
 		step_type[tid] = 4;
 	}
 
+	if (predicted < 0) {
+		lam[tid] *= dec;
+		step_type[tid] |= 8;
+	}
+
 }
 """)
 
 	type = ctc.type_to_typestr(dtype)
 	funcid = gain_ratio_step_funcid(nparam, dtype)
-	nhes = round(nparam*(nparam+1)/2)
-	return temp.render(funcid=funcid, fp_type=type, nparam=nparam, nhes=nhes, ndata=ndata)
+	return temp.render(funcid=funcid, fp_type=type, nparam=nparam)
 
-class SumResGradHesHesl(CudaFunction):
+class GainRatioStep(CudaFunction):
 	def __init__(self, nparam: int, dtype: cp.dtype):
 		
 		self.funcid = gain_ratio_step_funcid(nparam, dtype)
-		self.code = sum_res_grad_hes_hesl_code(nparam, dtype)
+		self.code = gain_ratio_step_code(nparam, dtype)
 
 		self.type_str = ctc.type_to_typestr(dtype)
 		self.nparam = nparam
@@ -819,15 +824,13 @@ class SumResGradHesHesl(CudaFunction):
 		self.mod = None
 		self.run_func = None
 
-	def run(self, ):
+	def run(self, f, ftp, pars_tp, step, g, h, pars, lam, step_type, N, mu = 0.25, eta = 0.75, acc = 5.0, dec = 2.0):
 		if self.run_func == None:
 			self.build()
 
-		N = round(Nelem / self.ndata)
-
 		Nthreads = 32
-		blockSize = math.ceil(Nelem / Nthreads)
-		self.run_func((blockSize,),(Nthreads,),(res, grad, hes, hesl, f, g, h, hl, N, Nelem))
+		blockSize = math.ceil(N / Nthreads)
+		self.run_func((blockSize,),(Nthreads,),(f, ftp, pars_tp, step, g, h, pars, lam, step_type, mu, eta, acc, dec))
 
 	def get_device_funcid(self):
 		return self.funcid
@@ -843,12 +846,13 @@ class SumResGradHesHesl(CudaFunction):
 		temp = Template(
 """
 extern \"C\" __global__
-void {{funcid}}(const {{fp_type}}* res, const {{fp_type}}* grad, const {{fp_type}}* hes, const {{fp_type}}* hesl,
-	{{fp_type}}* f, {{fp_type}}* g, {{fp_type}}* h, {{fp_type}}* hl, int N, int Nelem) 
+void {{funcid}}(const {{fp_type}}* f, const {{fp_type}}* ftp, const {{fp_type}}* pars_tp, const {{fp_type}}* step,
+	const {{fp_type}}* g, const {{fp_type}}* h, {{fp_type}}* pars, 
+	{{fp_type}}* lam, int8* step_type, {{fp_type}} mu, {{fp_type}} eta, {{fp_type}} acc, {{fp_type}} dec, int N) 
 {
 	int tid = blockDim.x * blockIdx.x + threadIdx.x;
 	if (tid < Nelem) {
-		{{dfuncid}}(res, grad, hes, hesl, f, g, h, hl, tid, N, Nelem);
+		{{dfuncid}}(f, ftp, pars_tp, step, g, h, pars, lam, step_type, mu, eta, acc, dec, tid, N);
 	}
 }
 """)
@@ -870,3 +874,7 @@ void {{funcid}}(const {{fp_type}}* res, const {{fp_type}}* grad, const {{fp_type
 
 	def get_deps(self):
 		return list()
+
+
+
+
