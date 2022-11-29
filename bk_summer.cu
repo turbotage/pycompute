@@ -4,9 +4,10 @@ void sum_res_jac_hes_hesl_4_21_f(const float* res, const float* grad, const floa
 	float* f, float* g, float* h, float* hl, int tid, int N, int Nelem) 
 {
 	int bucket = tid / 21;
-	atomicAdd(&f[bucket], res[tid]);
+	float rtid = res[tid];
+	atomicAdd(&f[bucket], rtid*rtid);
 	for (int i = 0; i < 4; ++i) {
-		atomicAdd(&g[i*N + bucket], grad[i*Nelem + tid]);
+		atomicAdd(&g[i*N + bucket], grad[i*Nelem+tid]);
 	}
 	for (int i = 0; i < 10; ++i) {
 		int i_nb = i*N + bucket;

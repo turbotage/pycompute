@@ -17,106 +17,6 @@ from . import linalg
 def gmw81_funcid(ndim: int, dtype: cp.dtype):
 	return 'gmw81' + ctc.dim_type_funcid(ndim, dtype)
 
-
-# def gmw81_code(ndim: int, dtype: cp.dtype):
-# 	codestr = Template(
-# """
-# __device__
-# void {{funcid}}({{fp_type}}* mat) {
-# 	{{fp_type}} m1 = 0.0f;
-# 	{{fp_type}} m2 = 0.0f;
-# 	{{fp_type}} beta2 = 0.0f;
-# 	{{fp_type}} temp;
-# 	{{fp_type}} arr[{{ndim}}];
-
-# 	for (int i = 0; i < {{ndim}}; ++i) {
-# 		temp = {{abs_func}}(mat[i*{{ndim}}+i]);
-# 		if (m1 < temp) {
-# 			m1 = temp;
-# 		}
-# 	}
-
-# 	if (beta2 < m1) {
-# 		beta2 = m1;
-# 	}
-
-# 	for (int i = 1; i < {{ndim}}; ++i) {
-# 		for (int j = 0; j < i; ++j) {
-# 			temp = {{abs_func}}(mat[i*{{ndim}}+j]);
-# 			if (m2 < temp) {
-# 				m2 = temp;
-# 			}
-# 		}
-# 	}
-
-# 	if ({{ndim}} > 1) {
-# 		m2 /= {{sqrt_func}}({{ndim}}*{{ndim}} - 1);
-# 	}
-
-# 	if (beta2 < m2) {
-# 		beta2 = m2;
-# 	}
-
-# 	for (int i = 0; i < {{ndim}}; ++i) {
-# 		{{fp_type}} d = {{abs_type}}(mat[i*{{ndim}}+i]);
-
-# 		if (d < {{machine_eps}}) {
-# 			d = {{machine_eps}};
-# 		}
-
-# 		m2 = 0.0f;
-# 		for (int j = i + 1; j < {{ndim}}; ++j) {
-# 			temp = {{abs_func}}(mat[j*{{ndim}}+i]);
-# 			if (m2 < temp) {
-# 				m2 = temp;
-# 			}
-# 		}
-
-# 		m2 *= m2;
-
-# 		if (m2 > d * beta2) {
-# 			d = m2 / beta2;
-# 		}
-
-# 		mat[i*{{ndim}}+i] = d;
-
-# 		for (int j = i + 1; j < {{ndim}}; ++j) {
-# 			int ji = j*{{ndim}}+i;
-# 			arr[j] = mat[ji];
-# 			mat[ji] /= d;
-# 		}
-
-# 		for (int j = i + 1; j < {{ndim}}; ++j) {
-# 			for (int k = j; k < {{ndim}}; ++k) {
-# 				mat[k*{{ndim}}+j] -= arr[j] * mat[k*{{ndim}}+i];
-# 			}
-# 		}
-
-# 	}
-
-# }
-# """)
-
-# 	type: str = ctc.check_fp32_or_fp64(CudaTensor(None, dtype), 'gmw81')
-# 	abs_func: str
-# 	sqrt_func: str
-# 	machine_eps: str
-# 	if dtype == cp.float32:
-# 		abs_func = 'fabsf'
-# 		sqrt_func = 'sqrtf'
-# 		machine_eps = '5e-7'
-# 	else:
-# 		abs_func = 'fabs'
-# 		sqrt_func = 'sqrt'
-# 		machine_eps = '5e-16'
-
-
-# 	funcid = gmw81_funcid(ndim, dtype)
-
-# 	return codestr.render(funcid=funcid, fp_type=type, ndim=ndim,
-# 		abs_func=abs_func, sqrt_func=sqrt_func, machine_eps=machine_eps)
-
-
 def gmw81_code(ndim: int, dtype: cp.dtype):
 	codestr = Template(
 """
@@ -213,12 +113,14 @@ void {{funcid}}({{fp_type}}* mat) {
 	return codestr.render(funcid=funcid, fp_type=type, ndim=ndim,
 		abs_func=abs_func, sqrt_func=sqrt_func, machine_eps=machine_eps)
 
-
 class GMW81(CudaFunction):
 	def __init__(self, ndim: int, dtype: cp.dtype):
 		self.funcid = gmw81_funcid(ndim, dtype)
 		self.code = gmw81_code(ndim, dtype)
 		self.type_str = ctc.type_to_typestr(dtype)
+
+		self.ndim = ndim
+		self.dtype = dtype
 
 	def get_device_funcid(self):
 		return self.funcid

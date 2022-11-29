@@ -90,12 +90,12 @@ class Eval(CudaFunction):
 	def __init__(self, expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
 
 		self.type_str = ctc.type_to_typestr(dtype)
-		self.pars_str = pars_str
-		self.consts_str = consts_str
+		self.pars_str = pars_str.copy()
+		self.consts_str = consts_str.copy()
 		self.ndata = ndata
 
-		self.funcid = eval_funcid(expr, pars_str, consts_str, ndata, dtype)
-		self.code = eval_code(expr, pars_str, consts_str, ndata, dtype)
+		self.funcid = eval_funcid(expr, self.pars_str, self.consts_str, ndata, dtype)
+		self.code = eval_code(expr, self.pars_str, self.consts_str, ndata, dtype)
 
 		self.mod = None
 		self.run_func = None
@@ -145,8 +145,13 @@ void {{funcid}}(const {{fp_type}}* pars, const {{fp_type}}* consts,
 
 	def build(self):
 		cc = cudap.code_gen_walking(self, "")
-		self.mod = cp.RawModule(code=cc)
-		self.run_func = self.mod.get_function(self.get_kernel_funcid())
+		try:
+			self.mod = cp.RawModule(code=cc)
+			self.run_func = self.mod.get_function(self.get_kernel_funcid())
+		except:
+			with open("on_compile_fail.cu", "w") as f:
+				f.write(cc)
+			raise
 		return cc
 
 	def get_deps(self):
@@ -154,15 +159,15 @@ void {{funcid}}(const {{fp_type}}* pars, const {{fp_type}}* consts,
 
 
 def resf_funcid(expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
-	return 'res' + ctc.dim_dim_dim_type_funcid(len(pars_str), len(consts_str), ndata,
-		dtype, 'res') + '_' + util.expr_hash(expr, 12)
+	return 'resf' + ctc.dim_dim_dim_type_funcid(len(pars_str), len(consts_str), ndata,
+		dtype, 'resf') + '_' + util.expr_hash(expr, 12)
 
 def resf_code(expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
 	rjh_temp = Template(
 """
 __device__
 void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp_type}}* data,
-	{{fp_type}}* eval, {{fp_type}}* jac, {{fp_type}}* hes, int tid, int N, int Nelem) 
+	{{fp_type}}* res, {{fp_type}}* f, int tid, int N, int Nelem) 
 {
 	{{fp_type}} pars[{{nparam}}];
 	int bucket = tid / {{ndata}};
@@ -173,6 +178,7 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp
 {{sub_expr}}
 
 {{res_expr}}
+
 	res[tid] = rtid;
 	atomicAdd(&f[bucket], rtid*rtid);
 }
@@ -204,7 +210,7 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp
 	for s in substs:
 		sub_str += '\t'+type+' '+cuprint.tcs_f(s[0])+' = '+cuprint.tcs_f(s[1])+';\n'
 
-	res_str = '\tfloat rtid = '+cuprint.tcs_f(reduced[0])+'-data[i];'
+	res_str = '\tfloat rtid = '+cuprint.tcs_f(reduced[0])+'-data[tid];'
 
 	for k in range(len(pars_str)):
 		p = pars_str[k]
@@ -219,8 +225,8 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp
 		res_str = res_str.replace(c, repl)
 
 	rjh_kernel = rjh_temp.render(funcid=funcid, fp_type=type,
-		nparam=nparam, nconst=nconst,
-		sub_expr=sub_str, res_str=res_str)
+		nparam=nparam, nconst=nconst, ndata=ndata,
+		sub_expr=sub_str, res_expr=res_str)
 
 
 	return rjh_kernel
@@ -229,12 +235,12 @@ class ResF(CudaFunction):
 	def __init__(self, expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
 
 		self.type_str = ctc.type_to_typestr(dtype)
-		self.pars_str = pars_str
-		self.consts_str = consts_str
+		self.pars_str = pars_str.copy()
+		self.consts_str = consts_str.copy()
 		self.ndata = ndata
 
-		self.funcid = eval_funcid(expr, pars_str, consts_str, ndata, dtype)
-		self.code = eval_code(expr, pars_str, consts_str, ndata, dtype)
+		self.funcid = resf_funcid(expr, self.pars_str, self.consts_str, ndata, dtype)
+		self.code = resf_code(expr, self.pars_str, self.consts_str, ndata, dtype)
 
 		self.mod = None
 		self.run_func = None
@@ -246,7 +252,7 @@ class ResF(CudaFunction):
 		N = round(Nelem / self.ndata)
 
 		Nthreads = 32
-		blockSize = np.ceil(N / Nthreads)
+		blockSize = math.ceil(N / Nthreads)
 		self.run_func((blockSize,),(Nthreads,),(pars, consts, data, res, ftp, N, Nelem))
 
 	def get_device_funcid(self):
@@ -263,12 +269,12 @@ class ResF(CudaFunction):
 		temp = Template(
 """
 extern \"C\" __global__
-void {{funcid}}(const {{fp_type}}* pars, const {{fp_type}}* consts,
-	{{fp_type}}* res, int N, int Nelem) 
+void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp_type}}* data,
+	{{fp_type}}* res, {{fp_type}}* f, int N, int Nelem) 
 {
 	int tid = blockDim.x * blockIdx.x + threadIdx.x;
 	if (tid < N) {
-		{{dfuncid}}(pars, consts, res, jac, hes, tid, N, Nelem);
+		{{dfuncid}}(params, consts, data, res, f, tid, N, Nelem);
 	}
 }
 """)
@@ -284,8 +290,13 @@ void {{funcid}}(const {{fp_type}}* pars, const {{fp_type}}* consts,
 
 	def build(self):
 		cc = cudap.code_gen_walking(self, "")
-		self.mod = cp.RawModule(code=cc)
-		self.run_func = self.mod.get_function(self.get_kernel_funcid())
+		try:
+			self.mod = cp.RawModule(code=cc)
+			self.run_func = self.mod.get_function(self.get_kernel_funcid())
+		except:
+			with open("on_compile_fail.cu", "w") as f:
+				f.write(cc)
+			raise
 		return cc
 
 	def get_deps(self):
@@ -400,12 +411,12 @@ class EvalJacHes(CudaFunction):
 	def __init__(self, expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
 
 		self.type_str = ctc.type_to_typestr(dtype)
-		self.pars_str = pars_str
-		self.consts_str = consts_str
+		self.pars_str = pars_str.copy()
+		self.consts_str = consts_str.copy()
 		self.ndata = ndata
 
-		self.funcid = eval_jac_hes_funcid(expr, pars_str, consts_str, ndata, dtype)
-		self.code = eval_jac_hes_code(expr, pars_str, consts_str, ndata, dtype)
+		self.funcid = eval_jac_hes_funcid(expr, self.pars_str, self.consts_str, ndata, dtype)
+		self.code = eval_jac_hes_code(expr, self.pars_str, self.consts_str, ndata, dtype)
 
 		self.mod = None
 		self.run_func = None
@@ -455,8 +466,13 @@ void {{funcid}}(const {{fp_type}}* pars, const {{fp_type}}* consts,
 
 	def build(self):
 		cc = cudap.code_gen_walking(self, "")
-		self.mod = cp.RawModule(code=cc)
-		self.run_func = self.mod.get_function(self.get_kernel_funcid())
+		try:
+			self.mod = cp.RawModule(code=cc)
+			self.run_func = self.mod.get_function(self.get_kernel_funcid())
+		except:
+			with open("on_compile_fail.cu", "w") as f:
+				f.write(cc)
+			raise
 		return cc
 
 	def get_deps(self):
@@ -590,12 +606,12 @@ class ResJacGradHesHesl(CudaFunction):
 	def __init__(self, expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
 
 		self.type_str = ctc.type_to_typestr(dtype)
-		self.pars_str = pars_str
-		self.consts_str = consts_str
+		self.pars_str = pars_str.copy()
+		self.consts_str = consts_str.copy()
 		self.ndata = ndata
 
-		self.funcid = res_jac_grad_hes_hesl_funcid(expr, pars_str, consts_str, ndata, dtype)
-		self.code = res_jac_grad_hes_hesl_code(expr, pars_str, consts_str, ndata, dtype)
+		self.funcid = res_jac_grad_hes_hesl_funcid(expr, self.pars_str, self.consts_str, ndata, dtype)
+		self.code = res_jac_grad_hes_hesl_code(expr, self.pars_str, self.consts_str, ndata, dtype)
 
 		self.mod = None
 		self.run_func = None
@@ -645,8 +661,13 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp
 
 	def build(self):
 		cc = cudap.code_gen_walking(self, "")
-		self.mod = cp.RawModule(code=cc)
-		self.run_func = self.mod.get_function(self.get_kernel_funcid())
+		try:
+			self.mod = cp.RawModule(code=cc)
+			self.run_func = self.mod.get_function(self.get_kernel_funcid())
+		except:
+			with open("on_compile_fail.cu", "w") as f:
+				f.write(cc)
+			raise
 		return cc
 
 	def get_deps(self):
@@ -742,8 +763,13 @@ void {{funcid}}(const {{fp_type}}* res, const {{fp_type}}* grad, const {{fp_type
 
 	def build(self):
 		cc = cudap.code_gen_walking(self, "")
-		self.mod = cp.RawModule(code=cc)
-		self.run_func = self.mod.get_function(self.get_kernel_funcid())
+		try:
+			self.mod = cp.RawModule(code=cc)
+			self.run_func = self.mod.get_function(self.get_kernel_funcid())
+		except:
+			with open("on_compile_fail.cu", "w") as f:
+				f.write(cc)
+			raise
 		return cc
 
 	def get_deps(self):
@@ -759,7 +785,7 @@ def gain_ratio_step_code(nparam: int, dtype: cp.dtype):
 __device__
 void {{funcid}}(const {{fp_type}}* f, const {{fp_type}}* ftp, const {{fp_type}}* pars_tp, const {{fp_type}}* step,
 	const {{fp_type}}* g, const {{fp_type}}* h, {{fp_type}}* pars, 
-	{{fp_type}}* lam, int8* step_type, {{fp_type}} mu, {{fp_type}} eta, {{fp_type}} acc, {{fp_type}} dec, int tid, int N) 
+	{{fp_type}}* lam, char* step_type, {{fp_type}} mu, {{fp_type}} eta, {{fp_type}} acc, {{fp_type}} dec, int tid, int N) 
 {
 	{{fp_type}} actual = f[tid] - ftp[tid];
 	{{fp_type}} predicted = 0.0f;
@@ -769,9 +795,9 @@ void {{funcid}}(const {{fp_type}}* f, const {{fp_type}}* ftp, const {{fp_type}}*
 		for (int j = 0; j <= i; ++j) {
 			float entry = h[k*N+tid] * step[i*N+tid] * step[j*N+tid];
 			if (i != j) {
-				predicted += entry;
+				predicted -= entry;
 			} else {
-				predicted += 2.0f * entry;
+				predicted -= 2.0f * entry;
 			}
 			++k;
 		}
@@ -779,7 +805,7 @@ void {{funcid}}(const {{fp_type}}* f, const {{fp_type}}* ftp, const {{fp_type}}*
 	predicted *= 0.5f;
 
 	for (int i = 0; i < {{nparam}}; ++i) {
-		predicted += step[i*N+tid] * g[i*N+tid];
+		predicted -= step[i*N+tid] * g[i*N+tid];
 	}
 
 	{{fp_type}} rho = actual / predicted;
@@ -830,7 +856,8 @@ class GainRatioStep(CudaFunction):
 
 		Nthreads = 32
 		blockSize = math.ceil(N / Nthreads)
-		self.run_func((blockSize,),(Nthreads,),(f, ftp, pars_tp, step, g, h, pars, lam, step_type, mu, eta, acc, dec))
+		self.run_func((blockSize,),(Nthreads,),(f, ftp, pars_tp, step, g, h, pars, lam, step_type, 
+			self.dtype(mu), self.dtype(eta), self.dtype(acc), self.dtype(dec), N))
 
 	def get_device_funcid(self):
 		return self.funcid
@@ -848,10 +875,10 @@ class GainRatioStep(CudaFunction):
 extern \"C\" __global__
 void {{funcid}}(const {{fp_type}}* f, const {{fp_type}}* ftp, const {{fp_type}}* pars_tp, const {{fp_type}}* step,
 	const {{fp_type}}* g, const {{fp_type}}* h, {{fp_type}}* pars, 
-	{{fp_type}}* lam, int8* step_type, {{fp_type}} mu, {{fp_type}} eta, {{fp_type}} acc, {{fp_type}} dec, int N) 
+	{{fp_type}}* lam, char* step_type, {{fp_type}} mu, {{fp_type}} eta, {{fp_type}} acc, {{fp_type}} dec, int N) 
 {
 	int tid = blockDim.x * blockIdx.x + threadIdx.x;
-	if (tid < Nelem) {
+	if (tid < N) {
 		{{dfuncid}}(f, ftp, pars_tp, step, g, h, pars, lam, step_type, mu, eta, acc, dec, tid, N);
 	}
 }
@@ -868,8 +895,13 @@ void {{funcid}}(const {{fp_type}}* f, const {{fp_type}}* ftp, const {{fp_type}}*
 
 	def build(self):
 		cc = cudap.code_gen_walking(self, "")
-		self.mod = cp.RawModule(code=cc)
-		self.run_func = self.mod.get_function(self.get_kernel_funcid())
+		try:
+			self.mod = cp.RawModule(code=cc)
+			self.run_func = self.mod.get_function(self.get_kernel_funcid())
+		except:
+			with open("on_compile_fail.cu", "w") as f:
+				f.write(cc)
+			raise
 		return cc
 
 	def get_deps(self):

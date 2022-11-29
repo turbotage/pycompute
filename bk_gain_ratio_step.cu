@@ -12,9 +12,9 @@ void gain_ratio_step_4_f(const float* f, const float* ftp, const float* pars_tp,
 		for (int j = 0; j <= i; ++j) {
 			float entry = h[k*N+tid] * step[i*N+tid] * step[j*N+tid];
 			if (i != j) {
-				predicted += entry;
+				predicted -= entry;
 			} else {
-				predicted += 2.0f * entry;
+				predicted -= 2.0f * entry;
 			}
 			++k;
 		}
@@ -22,7 +22,7 @@ void gain_ratio_step_4_f(const float* f, const float* ftp, const float* pars_tp,
 	predicted *= 0.5f;
 
 	for (int i = 0; i < 4; ++i) {
-		predicted += step[i*N+tid] * g[i*N+tid];
+		predicted -= step[i*N+tid] * g[i*N+tid];
 	}
 
 	float rho = actual / predicted;
@@ -55,7 +55,7 @@ void k_gain_ratio_step_4_f(const float* f, const float* ftp, const float* pars_t
 	float* lam, char* step_type, float mu, float eta, float acc, float dec, int N) 
 {
 	int tid = blockDim.x * blockIdx.x + threadIdx.x;
-	if (tid < Nelem) {
+	if (tid < N) {
 		gain_ratio_step_4_f(f, ftp, pars_tp, step, g, h, pars, lam, step_type, mu, eta, acc, dec, tid, N);
 	}
 }

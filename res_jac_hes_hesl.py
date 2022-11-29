@@ -3,7 +3,7 @@ import cupy as cp
 
 import cuda.cuda_program as cuda_cp
 from cuda.cuda_program import CudaTensor, CudaFunction
-from cuda.symbolic import EvalJacHes, ResJacGradHesHesl, SumResGradHesHesl, ResF
+from cuda.symbolic import EvalJacHes, ResJacGradHesHesl, SumResGradHesHesl, ResF, GainRatioStep
 from cuda.solver import GMW81Solver
 import math
 import time
@@ -58,6 +58,9 @@ hes_t = from_cu_tensor(hes)
 hesl = CudaTensor([round(nparam*(nparam+1)/2), Nelem], cp.float32)
 hesl_t = from_cu_tensor(hesl)
 
+step_type = CudaTensor([1, batch_size], cp.int8)
+step_type_t = from_cu_tensor(step_type)
+
 fsum = CudaTensor([1, batch_size], cp.float32)
 fsum_t = from_cu_tensor(fsum, zeros=True)
 
@@ -92,6 +95,10 @@ with open("bk_gmw81sol.cu", "w") as f:
 rescu = ResF(expr, pars_str, consts_str, ndata, cp.float32)
 with open("bk_res.cu", "w") as f:
 	f.write(rescu.build())
+
+gainstepcu = GainRatioStep(nparam, cp.float32)
+with open("bk_gain_ratio_step.cu", "w") as f:
+	f.write(gainstepcu.build())
 
 Amat = None
 bvec = None
@@ -128,16 +135,23 @@ def compact_to_LD(mat):
 	return (L,D)
 
 start = time.time()
-for i in range(0,100):
+for i in range(0,10):
 	fsum_t[:,:] = 0.0
 	fsum2_t[:,:] = 0.0
 
 	rjghhlcu.run(pars_t, consts_t, data_t, lam_t, res_t, jac_t, grad_t, hes_t, hesl_t, Nelem)
 	summercu.run(res_t, grad_t, hes_t, hesl_t, fsum_t, gsum_t, hsum_t, hlsum_t, Nelem)
 	gmw81solcu.run(hlsum_t, -gsum_t, step_t, batch_size)
-	tp_step = pars_t + step_t
-	rescu.run(tp_step, consts_t, data_t, res_t, fsum2_t)
-
+	pars_tp = pars_t + step_t
+	rescu.run(pars_tp, consts_t, data_t, res_t, fsum2_t, Nelem)
+	gainstepcu.run(fsum_t, fsum2_t, pars_tp, step_t, gsum_t, hes_t, pars_t, lam_t, step_type_t, batch_size)
+	#print('pars: ', pars_t[:,0])
+	#print('lam: ', lam_t[:,0])
+	#print('step_type: ', step_type_t[:,0])
+	#print('eig: ', cp.linalg.eigvalsh(compact_to_full(hlsum_t[:,0])))
+	#print('step: ', step_t[:,0])
+	#print('step_length: ', cp.linalg.norm(step_t[:,0]))
+	#print('End of iter')
 	
 
 
