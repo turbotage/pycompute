@@ -350,10 +350,11 @@ class GMW81Solver(CudaFunction):
 		self.mod = None
 		self.run_func = None
 
-	def run(self, mat, rhs, sol, N):
+	def run(self, mat, rhs, sol):
 		if self.run_func == None:
 			self.build()
 
+		N = mat.shape[1]
 		Nthreads = 32
 		blockSize = math.ceil(N / Nthreads)
 		self.run_func((blockSize,),(Nthreads,),(mat, rhs, sol, N))

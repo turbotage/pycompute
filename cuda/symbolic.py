@@ -100,10 +100,11 @@ class Eval(CudaFunction):
 		self.mod = None
 		self.run_func = None
 
-	def run(self, pars, consts, eval, jac, hes, Nelem):
+	def run(self, pars, consts, eval, jac, hes):
 		if self.run_func == None:
 			self.build()
 
+		Nelem = hes.shape[1]
 		N = round(Nelem / self.ndata)
 
 		Nthreads = 32
@@ -245,10 +246,11 @@ class ResF(CudaFunction):
 		self.mod = None
 		self.run_func = None
 
-	def run(self, pars, consts, data, res, ftp, Nelem):
+	def run(self, pars, consts, data, res, ftp):
 		if self.run_func == None:
 			self.build()
 
+		Nelem = consts.shape[1]
 		N = round(Nelem / self.ndata)
 
 		Nthreads = 32
@@ -421,10 +423,11 @@ class EvalJacHes(CudaFunction):
 		self.mod = None
 		self.run_func = None
 
-	def run(self, pars, consts, eval, jac, hes, Nelem):
+	def run(self, pars, consts, eval, jac, hes):
 		if self.run_func == None:
 			self.build()
 
+		Nelem = hes.shape[1]
 		N = round(Nelem / self.ndata)
 
 		Nthreads = 32
@@ -616,10 +619,11 @@ class ResJacGradHesHesl(CudaFunction):
 		self.mod = None
 		self.run_func = None
 
-	def run(self, pars, consts, data, lam, res, jac, grad, hes, hesl, Nelem):
+	def run(self, pars, consts, data, lam, res, jac, grad, hes, hesl):
 		if self.run_func == None:
 			self.build()
 
+		Nelem = hes.shape[1]
 		N = round(Nelem / self.ndata)
 
 		Nthreads = 32
@@ -718,12 +722,12 @@ class SumResGradHesHesl(CudaFunction):
 		self.mod = None
 		self.run_func = None
 
-	def run(self, res, grad, hes, hesl, f, g, h, hl, Nelem):
+	def run(self, res, grad, hes, hesl, f, g, h, hl):
 		if self.run_func == None:
 			self.build()
 
+		Nelem = hes.shape[1]
 		N = round(Nelem / self.ndata)
-
 		Nthreads = 32
 		blockSize = math.ceil(Nelem / Nthreads)
 		self.run_func((blockSize,),(Nthreads,),(res, grad, hes, hesl, f, g, h, hl, N, Nelem))
@@ -850,9 +854,11 @@ class GainRatioStep(CudaFunction):
 		self.mod = None
 		self.run_func = None
 
-	def run(self, f, ftp, pars_tp, step, g, h, pars, lam, step_type, N, mu = 0.25, eta = 0.75, acc = 5.0, dec = 2.0):
+	def run(self, f, ftp, pars_tp, step, g, h, pars, lam, step_type, mu = 0.25, eta = 0.75, acc = 5.0, dec = 2.0):
 		if self.run_func == None:
 			self.build()
+
+		N = pars.shape[1]
 
 		Nthreads = 32
 		blockSize = math.ceil(N / Nthreads)
@@ -908,5 +914,221 @@ void {{funcid}}(const {{fp_type}}* f, const {{fp_type}}* ftp, const {{fp_type}}*
 		return list()
 
 
+def clamp_pars_funcid(nparam: int, dtype: cp.dtype):
+	return 'clamp_pars' + ctc.dim_type_funcid(nparam, dtype)
+
+def clamp_pars_code(nparam: int, dtype: cp.dtype):
+	temp = Template(
+"""
+__device__
+bool {{funcid}}(const {{fp_type}}* lower_bound, const {{fp_type}}* upper_bound, {{fp_type}}* pars, int tid, int N) 
+{
+	bool clamped = false;
+	for (int i = 0; i < {{nparam}}; ++i) {
+		int index = i*N+tid;
+		{{fp_type}} p = pars[index];
+		{{fp_type}} u = upper_bound[i*N+tid];
+		{{fp_type}} l = lower_bound[i*N+tid];
+		if (p > u) {
+			clamped = true;
+			pars[index] = u;
+		} else if (p < l) {
+			clamped = true;
+			pars[index] = l;
+		}
+	}
+
+	return clamped;
+}
+""")
+
+	type = ctc.type_to_typestr(dtype)
+	funcid = clamp_pars_funcid(nparam, dtype)
+	return temp.render(funcid=funcid, fp_type=type, nparam=nparam)
+
+class ClampPars(CudaFunction):
+	def __init__(self, nparam: int, dtype: cp.dtype):
+		
+		self.funcid = clamp_pars_funcid(nparam, dtype)
+		self.code = clamp_pars_code(nparam, dtype)
+
+		self.type_str = ctc.type_to_typestr(dtype)
+		self.nparam = nparam
+		self.dtype = dtype
+
+		self.mod = None
+		self.run_func = None
+
+	def run(self, lower_bound, upper_bound, pars):
+		if self.run_func == None:
+			self.build()
+
+		N = pars.shape[1]
+
+		Nthreads = 32
+		blockSize = math.ceil(N / Nthreads)
+		self.run_func((blockSize,),(Nthreads,),(lower_bound, upper_bound, pars, N))
+
+	def get_device_funcid(self):
+		return self.funcid
+
+	def get_kernel_funcid(self):
+		funcid = self.funcid
+		return 'k_' + funcid
+
+	def get_device_code(self):
+		return self.code
+
+	def get_kernel_code(self):
+		temp = Template(
+"""
+extern \"C\" __global__
+void {{funcid}}(const {{fp_type}}* lower_bound, const {{fp_type}}* upper_bound, {{fp_type}}* pars, int N) 
+{
+	int tid = blockDim.x * blockIdx.x + threadIdx.x;
+	if (tid < N) {
+		{{dfuncid}}(lower_bound, upper_bound, pars, tid, N);
+	}
+}
+""")
+		fid = self.get_kernel_funcid()
+		dfid = self.get_device_funcid()
+
+		return temp.render(funcid=fid, fp_type=self.type_str, dfuncid=dfid)
+
+	def get_full_code(self):
+		code = self.get_device_code() + '\n'
+		code += self.get_kernel_code()
+		return code
+
+	def build(self):
+		cc = cudap.code_gen_walking(self, "")
+		try:
+			self.mod = cp.RawModule(code=cc)
+			self.run_func = self.mod.get_function(self.get_kernel_funcid())
+		except:
+			with open("on_compile_fail.cu", "w") as f:
+				f.write(cc)
+			raise
+		return cc
+
+	def get_deps(self):
+		return list()
+
+
+def error_convergence_funcid(nparam: int, ndata: int, dtype: cp.dtype):
+	return 'error_convergence' + ctc.dim_type_funcid(nparam, ndata, dtype)
+
+def error_convergence_code(nparam: int, ndata: int, tol: float, dtype: cp.dtype):
+	temp = Template(
+"""
+__device__
+void {{funcid}}(const {{fp_type}} pars, const {{fp_type}}* grad, const {{fp_type}}* lower_bound, {{fp_type}}* upper_bound, char* step_type, float tol, int tid, int N) 
+{
+	bool clamped = false;
+	{{fp_type}} clamped_norm = 0.0f;
+	{{fp_type}} norm = 0.0f;
+	{{fp_type}} temp1;
+	{{fp_type}} temp2;
+	int index;
+	for (int i = 0; i < {{nparam}}; ++i) {
+		index = i*N+tid;
+		temp1 = grad[index];
+		norm += temp1*temp1;
+		temp2 = pars[index];
+		temp1 = temp2 - temp1;
+		{{fp_type}} u = upper_bound[index];
+		{{fp_type}} l = lower_bound[index];
+		if (temp1 > u) {
+			clamped = true;
+			temp1 = u;
+		} else if (temp1 < l) {
+			clamped = true;
+			temp1 = l;
+		}
+		temp1 = temp2 - temp1;
+		clamped_norm += temp1*temp1;
+	}
+
+	if (clamped_norm < tol*(1 + norm))
+		if (step_type[tid] & 1 || clamped) {
+			step_type[tid] = 0;
+		}
+	}
+}
+""")
+
+	type = ctc.type_to_typestr(dtype)
+	funcid = gain_ratio_step_funcid(nparam, dtype)
+	return temp.render(funcid=funcid, fp_type=type, nparam=nparam)
+	
+class ErrorConvergence(CudaFunction):
+	def __init__(self, nparam: int, dtype: cp.dtype):
+		
+		self.funcid = error_convergence_funcid(nparam, dtype)
+		self.code = error_convergence_code(nparam, dtype)
+
+		self.type_str = ctc.type_to_typestr(dtype)
+		self.nparam = nparam
+		self.dtype = dtype
+
+		self.mod = None
+		self.run_func = None
+
+	def run(self, pars, grad, lower_bound, upper_bound, step_type, tol):
+		if self.run_func == None:
+			self.build()
+
+		N = pars.shape[1]
+
+		Nthreads = 32
+		blockSize = math.ceil(N / Nthreads)
+		self.run_func((blockSize,),(Nthreads,),(pars, grad, lower_bound, upper_bound, step_type, tol, N))
+
+	def get_device_funcid(self):
+		return self.funcid
+
+	def get_kernel_funcid(self):
+		funcid = self.funcid
+		return 'k_' + funcid
+
+	def get_device_code(self):
+		return self.code
+
+	def get_kernel_code(self):
+		temp = Template(
+"""
+extern \"C\" __global__
+void {{funcid}}(const {{fp_type}}* lower_bound, const {{fp_type}}* upper_bound, {{fp_type}}* pars, int N) 
+{
+	int tid = blockDim.x * blockIdx.x + threadIdx.x;
+	if (tid < N) {
+		{{dfuncid}}(lower_bound, upper_bound, pars, tid, N);
+	}
+}
+""")
+		fid = self.get_kernel_funcid()
+		dfid = self.get_device_funcid()
+
+		return temp.render(funcid=fid, fp_type=self.type_str, dfuncid=dfid)
+
+	def get_full_code(self):
+		code = self.get_device_code() + '\n'
+		code += self.get_kernel_code()
+		return code
+
+	def build(self):
+		cc = cudap.code_gen_walking(self, "")
+		try:
+			self.mod = cp.RawModule(code=cc)
+			self.run_func = self.mod.get_function(self.get_kernel_funcid())
+		except:
+			with open("on_compile_fail.cu", "w") as f:
+				f.write(cc)
+			raise
+		return cc
+
+	def get_deps(self):
+		return list()
 
 
