@@ -168,6 +168,16 @@ class CudaTensorChecking:
 		if v.shape[0] != m.shape[0]:
 			raise RuntimeError(v.name + ' and ' + m.name + ' must have the same batch dimension')
 
+def from_cu_tensor(t: CudaTensor, rand=False, zeros=False, ones=False, empty=True):
+	if rand:
+		return cp.random.rand(*(t.shape), dtype=t.dtype)
+	elif zeros:
+		return cp.zeros(shape=tuple(t.shape), dtype=t.dtype)
+	elif ones:
+		return cp.ones(shape=tuple(t.shape), dtype=t.dtype)
+	elif empty:
+		return cp.empty(shape=tuple(t.shape), dtype=t.dtype)
+	raise RuntimeError('from_cu_tensor can only construct uniform random, zeros, ones or empty')
 
 def gen_deps_dict(func: CudaFunction, deps: list[CudaFunction], keys: set[str]):
 	for f in func.get_deps():

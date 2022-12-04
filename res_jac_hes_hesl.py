@@ -17,64 +17,54 @@ batch_size = 1000000
 
 Nelem = batch_size * ndata
 
-def from_cu_tensor(t: CudaTensor, rand=False, zeros=False, ones=False):
-	if rand:
-		return cp.random.rand(*(t.shape), dtype=t.dtype)
-	if zeros:
-		return cp.zeros(shape=tuple(t.shape), dtype=t.dtype)
-	if ones:
-		return cp.ones(shape=tuple(t.shape), dtype=t.dtype)
-
-	return cp.empty(shape=tuple(t.shape), dtype=t.dtype)
-
 pars = CudaTensor([4, batch_size], cp.float32)
-pars_t = from_cu_tensor(pars, rand=True)
+pars_t = cuda_cp.from_cu_tensor(pars, rand=True)
 
 consts = CudaTensor([nconst, Nelem], cp.float32)
-consts_t = from_cu_tensor(consts, rand=True)
+consts_t = cuda_cp.from_cu_tensor(consts, rand=True)
 
 data = CudaTensor([1, Nelem], cp.float32)
-data_t = from_cu_tensor(data, rand=True)
+data_t = cuda_cp.from_cu_tensor(data, rand=True)
 
 lam = CudaTensor([1, Nelem], cp.float32)
-lam_t = from_cu_tensor(lam, ones=True)
+lam_t = cuda_cp.from_cu_tensor(lam, ones=True)
 lam_t = 2*lam_t
 
 step = CudaTensor([4, batch_size], cp.float32)
-step_t = from_cu_tensor(step)
+step_t = cuda_cp.from_cu_tensor(step)
 
 res = CudaTensor([1, Nelem], cp.float32)
-res_t = from_cu_tensor(res)
+res_t = cuda_cp.from_cu_tensor(res)
 
 jac = CudaTensor([nparam, Nelem], cp.float32)
-jac_t = from_cu_tensor(jac)
+jac_t = cuda_cp.from_cu_tensor(jac)
 
 grad = CudaTensor([nparam, Nelem], cp.float32)
-grad_t = from_cu_tensor(grad)
+grad_t = cuda_cp.from_cu_tensor(grad)
 
 hes = CudaTensor([round(nparam*(nparam+1)/2), Nelem], cp.float32)
-hes_t = from_cu_tensor(hes)
+hes_t = cuda_cp.from_cu_tensor(hes)
 
 hesl = CudaTensor([round(nparam*(nparam+1)/2), Nelem], cp.float32)
-hesl_t = from_cu_tensor(hesl)
+hesl_t = cuda_cp.from_cu_tensor(hesl)
 
 step_type = CudaTensor([1, batch_size], cp.int8)
 step_type_t = from_cu_tensor(step_type)
 
 fsum = CudaTensor([1, batch_size], cp.float32)
-fsum_t = from_cu_tensor(fsum, zeros=True)
+fsum_t = cuda_cp.from_cu_tensor(fsum, zeros=True)
 
 fsum2 = CudaTensor([1, batch_size], cp.float32)
-fsum2_t = from_cu_tensor(fsum2, zeros=True)
+fsum2_t = cuda_cp.from_cu_tensor(fsum2, zeros=True)
 
 gsum = CudaTensor([nparam, batch_size], cp.float32)
-gsum_t = from_cu_tensor(gsum, zeros=True)
+gsum_t = cuda_cp.from_cu_tensor(gsum, zeros=True)
 
 hsum = CudaTensor([round(nparam*(nparam+1)/2), batch_size], cp.float32)
-hsum_t = from_cu_tensor(hsum, zeros=True)
+hsum_t = cuda_cp.from_cu_tensor(hsum, zeros=True)
 
 hlsum = CudaTensor([round(nparam*(nparam+1)/2), batch_size], cp.float32)
-hlsum_t = from_cu_tensor(hlsum, zeros=True)
+hlsum_t = cuda_cp.from_cu_tensor(hlsum, zeros=True)
 
 expr = 'S0*(f*exp(-b*D_1)+(1-f)*exp(-b*D_2))'
 pars_str = ['S0', 'f', 'D_1', 'D_2']
@@ -99,6 +89,7 @@ with open("bk_res.cu", "w") as f:
 gainstepcu = GainRatioStep(nparam, cp.float32)
 with open("bk_gain_ratio_step.cu", "w") as f:
 	f.write(gainstepcu.build())
+
 
 Amat = None
 bvec = None
@@ -145,6 +136,7 @@ for i in range(0,10):
 	pars_tp = pars_t + step_t
 	rescu.run(pars_tp, consts_t, data_t, res_t, fsum2_t, Nelem)
 	gainstepcu.run(fsum_t, fsum2_t, pars_tp, step_t, gsum_t, hes_t, pars_t, lam_t, step_type_t, batch_size)
+	
 	#print('pars: ', pars_t[:,0])
 	#print('lam: ', lam_t[:,0])
 	#print('step_type: ', step_type_t[:,0])
