@@ -87,12 +87,14 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, {{fp_type}
 	return rjh_kernel
 
 class Eval(CudaFunction):
-	def __init__(self, expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
+	def __init__(self, expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype, write_to_file: bool = False):
 
 		self.type_str = ctc.type_to_typestr(dtype)
 		self.pars_str = pars_str.copy()
 		self.consts_str = consts_str.copy()
 		self.ndata = ndata
+
+		self.write_to_file = write_to_file
 
 		self.funcid = eval_funcid(expr, self.pars_str, self.consts_str, ndata, dtype)
 		self.code = eval_code(expr, self.pars_str, self.consts_str, ndata, dtype)
@@ -146,6 +148,9 @@ void {{funcid}}(const {{fp_type}}* pars, const {{fp_type}}* consts,
 
 	def build(self):
 		cc = cudap.code_gen_walking(self, "")
+		if self.write_to_file:
+			with open(self.get_device_funcid(), "w") as f:
+				f.write(cc)
 		try:
 			self.mod = cp.RawModule(code=cc)
 			self.run_func = self.mod.get_function(self.get_kernel_funcid())
@@ -264,12 +269,14 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, {{fp_type}
 	return rjh_kernel
 
 class EvalJacHes(CudaFunction):
-	def __init__(self, expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
+	def __init__(self, expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype, write_to_file: bool = False):
 
 		self.type_str = ctc.type_to_typestr(dtype)
 		self.pars_str = pars_str.copy()
 		self.consts_str = consts_str.copy()
 		self.ndata = ndata
+
+		self.write_to_file = write_to_file
 
 		self.funcid = eval_jac_hes_funcid(expr, self.pars_str, self.consts_str, ndata, dtype)
 		self.code = eval_jac_hes_code(expr, self.pars_str, self.consts_str, ndata, dtype)
@@ -323,6 +330,9 @@ void {{funcid}}(const {{fp_type}}* pars, const {{fp_type}}* consts,
 
 	def build(self):
 		cc = cudap.code_gen_walking(self, "")
+		if self.write_to_file:
+			with open(self.get_device_funcid(), "w") as f:
+				f.write(cc)
 		try:
 			self.mod = cp.RawModule(code=cc)
 			self.run_func = self.mod.get_function(self.get_kernel_funcid())

@@ -445,12 +445,14 @@ void {{funcid}}({{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol) {
 		gmw81_funcid=gmw81_fid, permute_vec_funcid=permv_fid, ldl_solve_funcid=ldlsol_fid, inv_permute_vec_funcid=ipermv_fid)
 
 class GMW81Solver(CudaFunction):
-	def __init__(self, ndim: int, dtype: cp.dtype):
+	def __init__(self, ndim: int, dtype: cp.dtype, write_to_file: bool = False):
 		self.funcid = gmw81_solver_funcid(ndim, dtype)
 		self.code = gmw81_solver_code(ndim, dtype)
 		self.type_str = ctc.type_to_typestr(dtype)
 		self.ndim = ndim
 		self.dtype = dtype
+
+		self.write_to_file = write_to_file
 
 		self.mod = None
 		self.run_func = None
@@ -534,6 +536,9 @@ void {{funcid}}({{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol, int 
 
 	def build(self):
 		cc = cudap.code_gen_walking(self, "")
+		if self.write_to_file:
+			with open(self.get_device_funcid(), "w") as f:
+				f.write(cc)
 		try:
 			self.mod = cp.RawModule(code=cc)
 			self.run_func = self.mod.get_function(self.get_kernel_funcid())
@@ -575,12 +580,14 @@ void {{funcid}}({{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol) {
 		ldl_funcid=ldl_fid, ldl_solve_funcid=ldlsol_fid)
 
 class LDLSolver(CudaFunction):
-	def __init__(self, ndim: int, dtype: cp.dtype):
+	def __init__(self, ndim: int, dtype: cp.dtype, write_to_file: bool = False):
 		self.funcid = ldl_solver_funcid(ndim, dtype)
 		self.code = ldl_solver_code(ndim, dtype)
 		self.type_str = ctc.type_to_typestr(dtype)
 		self.ndim = ndim
 		self.dtype = dtype
+
+		self.write_to_file = write_to_file
 
 		self.mod = None
 		self.run_func = None
@@ -664,6 +671,9 @@ void {{funcid}}({{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol, int 
 
 	def build(self):
 		cc = cudap.code_gen_walking(self, "")
+		if self.write_to_file:
+			with open(self.get_device_funcid(), "w") as f:
+				f.write(cc)
 		try:
 			self.mod = cp.RawModule(code=cc)
 			self.run_func = self.mod.get_function(self.get_kernel_funcid())
@@ -671,9 +681,6 @@ void {{funcid}}({{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol, int 
 			with open("on_compile_fail.cu", "w") as f:
 				f.write(cc)
 			raise
-		return cc
-
-		self.run_func = self.mod.get_function(self.get_kernel_funcid())
 		return cc
 
 	def get_deps(self):

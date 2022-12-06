@@ -199,3 +199,32 @@ def code_gen_walking(func: CudaFunction, code: str):
 	code += func.get_kernel_code() + '\n'
 
 	return code
+
+def compact_to_full(mat):
+	nmat = mat.shape[0]
+	n = math.floor(math.sqrt(2*nmat))
+	retmat = cp.empty((n,n))
+	k = 0
+	for i in range(0,n):
+		for j in range(0,i+1):
+			retmat[i,j] = mat[k]
+			if i != j:
+				retmat[j,i] = mat[k]
+			k += 1
+	return retmat
+
+def compact_to_LD(mat):
+	nmat = mat.shape[0]
+	n = math.floor(math.sqrt(2*nmat))
+	L = cp.zeros((n,n))
+	D = cp.zeros((n,n))
+	k = 0
+	for i in range(0,n):
+		for j in range(0,i+1):
+			if i != j:
+				L[i,j] = mat[k]
+			else:
+				L[i,j] = 1.0
+				D[i,j] = mat[k]
+			k += 1
+	return (L,D)

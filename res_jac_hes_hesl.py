@@ -3,8 +3,9 @@ import cupy as cp
 
 import cuda.cuda_program as cuda_cp
 from cuda.cuda_program import CudaTensor, CudaFunction
-from cuda.symbolic import EvalJacHes, ResJacGradHesHesl, SumResGradHesHesl, ResF, GainRatioStep
+from cuda.symbolic import EvalJacHes
 from cuda.solver import GMW81Solver
+from cuda.lsqnonlin import ResJacGradHesHesl, SumResGradHesHesl, ResF, GainRatioStep
 import math
 import time
 import torch
@@ -49,7 +50,7 @@ hesl = CudaTensor([round(nparam*(nparam+1)/2), Nelem], cp.float32)
 hesl_t = cuda_cp.from_cu_tensor(hesl)
 
 step_type = CudaTensor([1, batch_size], cp.int8)
-step_type_t = from_cu_tensor(step_type)
+step_type_t = cuda_cp.from_cu_tensor(step_type)
 
 fsum = CudaTensor([1, batch_size], cp.float32)
 fsum_t = cuda_cp.from_cu_tensor(fsum, zeros=True)
@@ -96,46 +97,19 @@ bvec = None
 Lmat = None
 Dmat = None
 
-def compact_to_full(mat):
-	nmat = mat.shape[0]
-	n = math.floor(math.sqrt(2*nmat))
-	retmat = cp.empty((n,n))
-	k = 0
-	for i in range(0,n):
-		for j in range(0,i+1):
-			retmat[i,j] = mat[k]
-			if i != j:
-				retmat[j,i] = mat[k]
-			k += 1
-	return retmat
 
-def compact_to_LD(mat):
-	nmat = mat.shape[0]
-	n = math.floor(math.sqrt(2*nmat))
-	L = cp.zeros((n,n))
-	D = cp.zeros((n,n))
-	k = 0
-	for i in range(0,n):
-		for j in range(0,i+1):
-			if i != j:
-				L[i,j] = mat[k]
-			else:
-				L[i,j] = 1.0
-				D[i,j] = mat[k]
-			k += 1
-	return (L,D)
 
 start = time.time()
 for i in range(0,10):
 	fsum_t[:,:] = 0.0
 	fsum2_t[:,:] = 0.0
 
-	rjghhlcu.run(pars_t, consts_t, data_t, lam_t, res_t, jac_t, grad_t, hes_t, hesl_t, Nelem)
-	summercu.run(res_t, grad_t, hes_t, hesl_t, fsum_t, gsum_t, hsum_t, hlsum_t, Nelem)
-	gmw81solcu.run(hlsum_t, -gsum_t, step_t, batch_size)
+	rjghhlcu.run(pars_t, consts_t, data_t, lam_t, res_t, jac_t, grad_t, hes_t, hesl_t)
+	summercu.run(res_t, grad_t, hes_t, hesl_t, fsum_t, gsum_t, hsum_t, hlsum_t)
+	gmw81solcu.run(hlsum_t, -gsum_t, step_t)
 	pars_tp = pars_t + step_t
-	rescu.run(pars_tp, consts_t, data_t, res_t, fsum2_t, Nelem)
-	gainstepcu.run(fsum_t, fsum2_t, pars_tp, step_t, gsum_t, hes_t, pars_t, lam_t, step_type_t, batch_size)
+	rescu.run(pars_tp, consts_t, data_t, res_t, fsum2_t)
+	gainstepcu.run(fsum_t, fsum2_t, pars_tp, step_t, gsum_t, hes_t, pars_t, lam_t, step_type_t)
 	
 	#print('pars: ', pars_t[:,0])
 	#print('lam: ', lam_t[:,0])

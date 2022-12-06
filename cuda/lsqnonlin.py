@@ -92,12 +92,14 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp
 	return rjh_kernel
 
 class ResF(CudaFunction):
-	def __init__(self, expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
+	def __init__(self, expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype, write_to_file: bool = False):
 
 		self.type_str = ctc.type_to_typestr(dtype)
 		self.pars_str = pars_str.copy()
 		self.consts_str = consts_str.copy()
 		self.ndata = ndata
+
+		self.write_to_file = write_to_file
 
 		self.funcid = resf_funcid(expr, self.pars_str, self.consts_str, ndata, dtype)
 		self.code = resf_code(expr, self.pars_str, self.consts_str, ndata, dtype)
@@ -151,6 +153,9 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp
 
 	def build(self):
 		cc = cudap.code_gen_walking(self, "")
+		if self.write_to_file:
+			with open(self.get_device_funcid() + '.cu', "w") as f:
+				f.write(cc)
 		try:
 			self.mod = cp.RawModule(code=cc)
 			self.run_func = self.mod.get_function(self.get_kernel_funcid())
@@ -192,10 +197,9 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp
 {{hes_expr}}
 		
 	int k = 0;
-	#pragma unroll
 	for (int i = 0; i < {{nparam}}; ++i) {
 		for (int j = 0; j <= i; ++j) {
-			float jtemp = jac[i*Nelem+tid] * jac[j*Nelem+tid];
+			{{fp_type}} jtemp = jac[i*Nelem+tid] * jac[j*Nelem+tid];
 			hes[k*Nelem+tid] += jtemp;
 			if (i != j) {
 				hesl[k*Nelem+tid] = hes[k*Nelem+tid];
@@ -288,12 +292,14 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp
 	return rjh_kernel
 
 class ResJacGradHesHesl(CudaFunction):
-	def __init__(self, expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
+	def __init__(self, expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype, write_to_file: bool = False):
 
 		self.type_str = ctc.type_to_typestr(dtype)
 		self.pars_str = pars_str.copy()
 		self.consts_str = consts_str.copy()
 		self.ndata = ndata
+
+		self.write_to_file = write_to_file
 
 		self.funcid = res_jac_grad_hes_hesl_funcid(expr, self.pars_str, self.consts_str, ndata, dtype)
 		self.code = res_jac_grad_hes_hesl_code(expr, self.pars_str, self.consts_str, ndata, dtype)
@@ -330,7 +336,7 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp
 	{{fp_type}}* res, {{fp_type}}* jac, {{fp_type}}* grad, {{fp_type}}* hes, {{fp_type}}* hesl, int N, int Nelem) 
 {
 	int tid = blockDim.x * blockIdx.x + threadIdx.x;
-	if (tid < N) {
+	if (tid < Nelem) {
 		{{dfuncid}}(params, consts, data, lam, res, jac, grad, hes, hesl, tid, N, Nelem);
 	}
 }
@@ -347,6 +353,9 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp
 
 	def build(self):
 		cc = cudap.code_gen_walking(self, "")
+		if self.write_to_file:
+			with open(self.get_device_funcid() + '.cu', "w") as f:
+				f.write(cc)
 		try:
 			self.mod = cp.RawModule(code=cc)
 			self.run_func = self.mod.get_function(self.get_kernel_funcid())
@@ -391,10 +400,12 @@ void {{funcid}}(const {{fp_type}}* res, const {{fp_type}}* grad, const {{fp_type
 	return temp.render(funcid=funcid, fp_type=type, nparam=nparam, nhes=nhes, ndata=ndata)
 
 class SumResGradHesHesl(CudaFunction):
-	def __init__(self, nparam: int, ndata: int, dtype: cp.dtype):
+	def __init__(self, nparam: int, ndata: int, dtype: cp.dtype, write_to_file: bool = False):
 		
 		self.funcid = sum_res_grad_hes_hesl_funcid(nparam, ndata, dtype)
 		self.code = sum_res_grad_hes_hesl_code(nparam, ndata, dtype)
+
+		self.write_to_file = write_to_file
 
 		self.type_str = ctc.type_to_typestr(dtype)
 		self.nparam = nparam
@@ -449,6 +460,10 @@ void {{funcid}}(const {{fp_type}}* res, const {{fp_type}}* grad, const {{fp_type
 
 	def build(self):
 		cc = cudap.code_gen_walking(self, "")
+		if self.write_to_file:
+			with open(self.get_device_funcid() + '.cu', "w") as f:
+				f.write(cc)
+
 		try:
 			self.mod = cp.RawModule(code=cc)
 			self.run_func = self.mod.get_function(self.get_kernel_funcid())
@@ -524,10 +539,12 @@ void {{funcid}}(const {{fp_type}}* f, const {{fp_type}}* ftp, const {{fp_type}}*
 	return temp.render(funcid=funcid, fp_type=type, nparam=nparam)
 
 class GainRatioStep(CudaFunction):
-	def __init__(self, nparam: int, dtype: cp.dtype):
+	def __init__(self, nparam: int, dtype: cp.dtype, write_to_file: bool = False):
 		
 		self.funcid = gain_ratio_step_funcid(nparam, dtype)
 		self.code = gain_ratio_step_code(nparam, dtype)
+
+		self.write_to_file = write_to_file
 
 		self.type_str = ctc.type_to_typestr(dtype)
 		self.nparam = nparam
@@ -545,7 +562,7 @@ class GainRatioStep(CudaFunction):
 		Nthreads = 32
 		blockSize = math.ceil(N / Nthreads)
 		self.run_func((blockSize,),(Nthreads,),(f, ftp, pars_tp, step, g, h, pars, lam, step_type, 
-			self.dtype(mu), self.dtype(eta), self.dtype(acc), self.dtype(dec), N))
+			cp.float64(mu).astype(self.dtype), cp.float64(eta).astype(self.dtype), cp.float64(acc).astype(self.dtype), cp.float64(dec).astype(self.dtype), N))
 
 	def get_device_funcid(self):
 		return self.funcid
@@ -583,6 +600,9 @@ void {{funcid}}(const {{fp_type}}* f, const {{fp_type}}* ftp, const {{fp_type}}*
 
 	def build(self):
 		cc = cudap.code_gen_walking(self, "")
+		if self.write_to_file:
+			with open(self.get_device_funcid() + '.cu', "w") as f:
+				f.write(cc)
 		try:
 			self.mod = cp.RawModule(code=cc)
 			self.run_func = self.mod.get_function(self.get_kernel_funcid())
@@ -629,10 +649,12 @@ bool {{funcid}}(const {{fp_type}}* lower_bound, const {{fp_type}}* upper_bound, 
 	return temp.render(funcid=funcid, fp_type=type, nparam=nparam)
 
 class ClampPars(CudaFunction):
-	def __init__(self, nparam: int, dtype: cp.dtype):
+	def __init__(self, nparam: int, dtype: cp.dtype, write_to_file: bool = False):
 		
 		self.funcid = clamp_pars_funcid(nparam, dtype)
 		self.code = clamp_pars_code(nparam, dtype)
+
+		self.write_to_file = write_to_file
 
 		self.type_str = ctc.type_to_typestr(dtype)
 		self.nparam = nparam
@@ -685,6 +707,9 @@ void {{funcid}}(const {{fp_type}}* lower_bound, const {{fp_type}}* upper_bound, 
 
 	def build(self):
 		cc = cudap.code_gen_walking(self, "")
+		if self.write_to_file:
+			with open(self.get_device_funcid() + '.cu', "w") as f:
+				f.write(cc)
 		try:
 			self.mod = cp.RawModule(code=cc)
 			self.run_func = self.mod.get_function(self.get_kernel_funcid())
@@ -705,7 +730,7 @@ def gradient_convergence_code(nparam: int, dtype: cp.dtype):
 	temp = Template(
 """
 __device__
-void {{funcid}}(const {{fp_type}} pars, const {{fp_type}}* grad, const {{fp_type}}* lower_bound, {{fp_type}}* upper_bound, char* step_type, float tol, int tid, int N) 
+void {{funcid}}(const {{fp_type}}* pars, const {{fp_type}}* grad, const {{fp_type}}* lower_bound, const {{fp_type}}* upper_bound, char* step_type, float tol, int tid, int N) 
 {
 	bool clamped = false;
 	{{fp_type}} clamped_norm = 0.0f;
@@ -732,7 +757,7 @@ void {{funcid}}(const {{fp_type}} pars, const {{fp_type}}* grad, const {{fp_type
 		clamped_norm += temp1*temp1;
 	}
 
-	if (clamped_norm < tol*(1 + norm))
+	if (clamped_norm < tol*(1 + norm)) {
 		if (step_type[tid] & 1 || clamped) {
 			step_type[tid] = 0;
 		}
@@ -745,9 +770,11 @@ void {{funcid}}(const {{fp_type}} pars, const {{fp_type}}* grad, const {{fp_type
 	return temp.render(funcid=funcid, fp_type=type, nparam=nparam)
 	
 class GradientConvergence(CudaFunction):
-	def __init__(self, nparam: int, dtype: cp.dtype):
+	def __init__(self, nparam: int, dtype: cp.dtype, write_to_file: bool = False):
 		self.funcid = gradient_convergence_funcid(nparam, dtype)
 		self.code = gradient_convergence_code(nparam, dtype)
+
+		self.write_to_file = write_to_file
 
 		self.type_str = ctc.type_to_typestr(dtype)
 		self.nparam = nparam
@@ -764,7 +791,7 @@ class GradientConvergence(CudaFunction):
 
 		Nthreads = 32
 		blockSize = math.ceil(N / Nthreads)
-		self.run_func((blockSize,),(Nthreads,),(pars, grad, lower_bound, upper_bound, step_type, tol, N))
+		self.run_func((blockSize,),(Nthreads,),(pars, grad, lower_bound, upper_bound, step_type, cp.float64(tol).astype(self.dtype), N))
 
 	def get_device_funcid(self):
 		return self.funcid
@@ -780,11 +807,11 @@ class GradientConvergence(CudaFunction):
 		temp = Template(
 """
 extern \"C\" __global__
-void {{funcid}}(const {{fp_type}}* lower_bound, const {{fp_type}}* upper_bound, {{fp_type}}* pars, int N) 
+void {{funcid}}(const float* pars, const float* grad, const {{fp_type}}* lower_bound, const {{fp_type}}* upper_bound, char* step_type, float tol, int N) 
 {
 	int tid = blockDim.x * blockIdx.x + threadIdx.x;
 	if (tid < N) {
-		{{dfuncid}}(lower_bound, upper_bound, pars, tid, N);
+		{{dfuncid}}(pars, grad, lower_bound, upper_bound, step_type, tol, tid, N);
 	}
 }
 """)
@@ -800,6 +827,10 @@ void {{funcid}}(const {{fp_type}}* lower_bound, const {{fp_type}}* upper_bound, 
 
 	def build(self):
 		cc = cudap.code_gen_walking(self, "")
+		if self.write_to_file:
+			with open(self.get_device_funcid() + '.cu', "w") as f:
+				f.write(cc)
+
 		try:
 			self.mod = cp.RawModule(code=cc)
 			self.run_func = self.mod.get_function(self.get_kernel_funcid())
@@ -814,68 +845,73 @@ void {{funcid}}(const {{fp_type}}* lower_bound, const {{fp_type}}* upper_bound, 
 
 
 class SecondOrderLevenbergMarquardt(CudaFunction):
-    def __init__(self, expr, pars_str, consts_str, pars_t, consts_t, data_t, lower_bound_t, upper_bound_t):
-        self.nparam = pars_t.shape[0]
-        self.dtype = pars_t.dtype
-        self.nhes = round(self.nparam * (self.nparam + 1) / 2)
-        self.nconst = consts_t.shape[0]
-        self.batch_size = pars_t.shape[1]
-        self.Nelem = data_t.shape[1]
-        self.ndata = round(self.Nelem / self.batch_size)
+	def __init__(self, expr, pars_str, consts_str, pars_t, consts_t, data_t, lower_bound_t, upper_bound_t, write_to_file: bool = False):
+		self.nparam = pars_t.shape[0]
+		self.dtype = pars_t.dtype
+		self.nhes = round(self.nparam * (self.nparam + 1) / 2)
+		self.nconst = consts_t.shape[0]
+		self.batch_size = pars_t.shape[1]
+		self.Nelem = data_t.shape[1]
+		self.ndata = round(self.Nelem / self.batch_size)
 
-        self.expr = expr
-        self.pars_str = pars_str
-        self.consts_str = consts_str
+		self.write_to_file = write_to_file
 
-        self.pars_t = pars_t
-        self.consts_t = consts_t
-        self.data_t = data_t
-        self.lower_bound_t = lower_bound_t
-        self.upper_bound_t = upper_bound_t
+		self.expr = expr
+		self.pars_str = pars_str
+		self.consts_str = consts_str
 
-        self.lam_t = cp.ones((1, self.batch_size), dtype=self.dtype)
-        self.step_t = cp.empty((self.nparam, self.batch_size), dtype=self.dtype)
-        self.res_t = cp.empty((1, self.Nelem), dtype=self.dtype)
-        self.jac_t = cp.empty((self.nparam, self.Nelem), dtype=self.dtype)
-        self.gradparts_t = cp.empty((self.nparam, self.Nelem), dtype=self.dtype)
-        self.hesparts_t = cp.empty((self.nhes, self.Nelem), dtype=self.dtype)
-        self.heslparts_t = cp.empty((self.nhes, self.batch_size), dtype=self.dtype)
-        self.step_type_t = cp.ones((1, self.batch_size), dtype=cp.int8)
-        self.f_t = cp.empty((1, self.batch_size), dtype=self.dtype)
-        self.ftp_t = cp.empty((1, self.batch_size), dtype=self.dtype)
-        self.grad_t = cp.empty((self.nparam, self.batch_size), dtype=self.dtype)
-        self.hes_t = cp.empty((self.nhes, self.batch_size), dtype=self.dtype)
-        self.hesl_t = cp.empty((self.nhes, self.batch_size), dtype=self.dtype)
-        self.pars_tp_t = cp.empty((self.nparam, self.batch_size), dtype=self.dtype)
+		self.pars_t = pars_t
+		self.consts_t = consts_t
+		self.data_t = data_t
+		self.lower_bound_t = lower_bound_t
+		self.upper_bound_t = upper_bound_t
 
-        self.gradcu = ResJacGradHesHesl(self.expr, self.pars_str, self.consts_str, self.ndata, self.dtype)
-        self.gradsumcu = SumResGradHesHesl(self.nparam, self.ndata, self.dtype)
-        self.gmw81solcu = solver.GMW81Solver(self.nparam, self.dtype)
-        self.rescu = ResF(self.expr, self.pars_str, self.consts_str, self.ndata, self.dtype)
-        self.gaincu = GainRatioStep(self.nparam, self.dtype)
-        self.clampcu = ClampPars(self.nparam, self.dtype)
-        self.convcu = GradientConvergence(self.nparam, self.dtype)
+		self.lam_t = 10*cp.ones((1, self.batch_size), dtype=self.dtype)
+		self.step_t = cp.empty((self.nparam, self.batch_size), dtype=self.dtype)
+		self.res_t = cp.empty((1, self.Nelem), dtype=self.dtype)
+		self.jac_t = cp.empty((self.nparam, self.Nelem), dtype=self.dtype)
+		self.grad_t = cp.empty((self.nparam, self.Nelem), dtype=self.dtype)
+		self.hes_t = cp.empty((self.nhes, self.Nelem), dtype=self.dtype)
+		self.hesl_t = cp.empty((self.nhes, self.Nelem), dtype=self.dtype)
+		self.step_type_t = cp.ones((1, self.batch_size), dtype=cp.int8)
+		self.f_t = cp.empty((1, self.batch_size), dtype=self.dtype)
+		self.ftp_t = cp.empty((1, self.batch_size), dtype=self.dtype)
+		self.g_t = cp.empty((self.nparam, self.batch_size), dtype=self.dtype)
+		self.h_t = cp.empty((self.nhes, self.batch_size), dtype=self.dtype)
+		self.hl_t = cp.empty((self.nhes, self.batch_size), dtype=self.dtype)
+		self.pars_tp_t = cp.empty((self.nparam, self.batch_size), dtype=self.dtype)
 
-    def run(self, iters: int, tol: float):
-        for i in range(0,iters):
-            self.f_t.fill(0.0)
-            self.ftp_t.fill(0.0)
+		self.gradcu = ResJacGradHesHesl(self.expr, self.pars_str, self.consts_str, self.ndata, self.dtype, self.write_to_file)
+		self.gradsumcu = SumResGradHesHesl(self.nparam, self.ndata, self.dtype, self.write_to_file)
+		self.gmw81solcu = solver.GMW81Solver(self.nparam, self.dtype, self.write_to_file)
+		self.rescu = ResF(self.expr, self.pars_str, self.consts_str, self.ndata, self.dtype, self.write_to_file)
+		self.gaincu = GainRatioStep(self.nparam, self.dtype, self.write_to_file)
+		self.clampcu = ClampPars(self.nparam, self.dtype, self.write_to_file)
+		self.convcu = GradientConvergence(self.nparam, self.dtype, self.write_to_file)
 
-            self.gradcu.run(self.pars_t, self.consts_t, self.data_t, self.lam_t, 
-                self.res_t, self.jac_t, self.gradparts_t, self.hesparts_t, self.heslparts_t, self.Nelem)
-            self.gradsumcu.run(self.res_t, self.gradparts_t, self.hesparts_t, self.heslparts_t, 
-                self.f_t, self.grad_t, self.hes_t, self.hesl_t, self.Nelem)
-            self.gmw81solcu.run(self.hesl_t, -self.grad_t, self.step_t, self.batch_size)
+	def run(self, iters: int, tol: float):
+		for i in range(0,iters):
+			self.f_t.fill(0.0)
+			self.ftp_t.fill(0.0)
+			self.g_t.fill(0.0)
+			self.h_t.fill(0.0)
+			self.hl_t.fill(0.0)
 
-            self.pars_tp_t += self.pars_t + self.step_t
+			self.gradcu.run(self.pars_t, self.consts_t, self.data_t, self.lam_t, 
+				self.res_t, self.jac_t, self.grad_t, self.hes_t, self.hesl_t)
+			self.gradsumcu.run(self.res_t, self.grad_t, self.hes_t, self.hesl_t, 
+				self.f_t, self.g_t, self.h_t, self.hl_t)
+			self.gmw81solcu.run(self.hl_t, -self.g_t, self.step_t)
 
-            self.rescu.run(self.pars_tp_t, self.consts_t, self.data_t, self.res_t, 
-                self.ftp_t, self.Nelem)
-            self.gaincu.run(self.f_t, self.ftp_t, self.pars_tp_t, self.step_t, 
-                self.grad_t, self.hes_t, self.pars_t, self.lam_t, self.step_type_t, self.batch_size)
-            self.clampcu.run(self.lower_bound_t, self.upper_bound_t, self.pars_t)
-            self.convcu.run(self.pars_t, self.grad_t, self.lower_bound_t, 
-                self.upper_bound_t, self.step_type_t, cp.float32(tol))
+			#self.pars_tp_t += self.pars_t + self.step_t
+			#self.pars_t += self.step_t
+
+			#self.rescu.run(self.pars_tp_t, self.consts_t, self.data_t, self.res_t, self.ftp_t)
+			#self.gaincu.run(self.f_t, self.ftp_t, self.pars_tp_t, self.step_t, 
+			#    self.grad_t, self.hes_t, self.pars_t, self.lam_t, self.step_type_t)
+			#self.clampcu.run(self.lower_bound_t, self.upper_bound_t, self.pars_t)
+			#self.convcu.run(self.pars_t, self.grad_t, self.lower_bound_t, 
+			#    self.upper_bound_t, self.step_type_t, cp.float32(tol))
 
 
 
