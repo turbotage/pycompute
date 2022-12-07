@@ -5,7 +5,7 @@ void res_jac_grad_hes_hesl_4_1_21_f_f7def86f0a03(const float* params, const floa
 {
 	float pars[4];
 	int bucket = tid / 21;
-	#pragma unroll
+
 	for (int i = 0; i < 4; ++i) {
 		pars[i] = params[i*N+bucket];
 	}
@@ -65,6 +65,7 @@ void k_res_jac_grad_hes_hesl_4_1_21_f_f7def86f0a03(const float* params, const fl
 	float* res, float* jac, float* grad, float* hes, float* hesl, int N, int Nelem) 
 {
 	int tid = blockDim.x * blockIdx.x + threadIdx.x;
+
 	if (tid < Nelem) {
 		res_jac_grad_hes_hesl_4_1_21_f_f7def86f0a03(params, consts, data, lam, res, jac, grad, hes, hesl, tid, N, Nelem);
 	}

@@ -115,7 +115,7 @@ class ResF(CudaFunction):
 		N = round(Nelem / self.ndata)
 
 		Nthreads = 32
-		blockSize = math.ceil(N / Nthreads)
+		blockSize = math.ceil(Nelem / Nthreads)
 		self.run_func((blockSize,),(Nthreads,),(pars, consts, data, res, ftp, N, Nelem))
 
 	def get_device_funcid(self):
@@ -183,7 +183,7 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp
 {
 	{{fp_type}} pars[{{nparam}}];
 	int bucket = tid / {{ndata}};
-	#pragma unroll
+
 	for (int i = 0; i < {{nparam}}; ++i) {
 		pars[i] = params[i*N+bucket];
 	}
@@ -315,7 +315,7 @@ class ResJacGradHesHesl(CudaFunction):
 		N = round(Nelem / self.ndata)
 
 		Nthreads = 32
-		blockSize = math.ceil(N / Nthreads)
+		blockSize = math.ceil(Nelem / Nthreads)
 		self.run_func((blockSize,),(Nthreads,),(pars, consts, data, lam, res, jac, grad, hes, hesl, N, Nelem))
 
 	def get_device_funcid(self):
@@ -336,6 +336,7 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp
 	{{fp_type}}* res, {{fp_type}}* jac, {{fp_type}}* grad, {{fp_type}}* hes, {{fp_type}}* hesl, int N, int Nelem) 
 {
 	int tid = blockDim.x * blockIdx.x + threadIdx.x;
+
 	if (tid < Nelem) {
 		{{dfuncid}}(params, consts, data, lam, res, jac, grad, hes, hesl, tid, N, Nelem);
 	}
@@ -866,7 +867,7 @@ class SecondOrderLevenbergMarquardt(CudaFunction):
 		self.lower_bound_t = lower_bound_t
 		self.upper_bound_t = upper_bound_t
 
-		self.lam_t = 10*cp.ones((1, self.batch_size), dtype=self.dtype)
+		self.lam_t = 5*cp.ones((1, self.batch_size), dtype=self.dtype)
 		self.step_t = cp.empty((self.nparam, self.batch_size), dtype=self.dtype)
 		self.res_t = cp.empty((1, self.Nelem), dtype=self.dtype)
 		self.jac_t = cp.empty((self.nparam, self.Nelem), dtype=self.dtype)
@@ -903,8 +904,8 @@ class SecondOrderLevenbergMarquardt(CudaFunction):
 				self.f_t, self.g_t, self.h_t, self.hl_t)
 			self.gmw81solcu.run(self.hl_t, -self.g_t, self.step_t)
 
-			#self.pars_tp_t += self.pars_t + self.step_t
-			#self.pars_t += self.step_t
+			#self.pars_tp_t += cp.nan_to_num(self.pars_t + self.step_t, posinf=0.0, neginf=0.0)
+			self.pars_t -= 0.1*cp.nan_to_num(self.step_t, posinf=0.0, neginf=0.0)
 
 			#self.rescu.run(self.pars_tp_t, self.consts_t, self.data_t, self.res_t, self.ftp_t)
 			#self.gaincu.run(self.f_t, self.ftp_t, self.pars_tp_t, self.step_t, 
@@ -913,5 +914,6 @@ class SecondOrderLevenbergMarquardt(CudaFunction):
 			#self.convcu.run(self.pars_t, self.grad_t, self.lower_bound_t, 
 			#    self.upper_bound_t, self.step_type_t, cp.float32(tol))
 
+		return self.pars_t
 
 

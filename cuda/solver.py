@@ -511,6 +511,7 @@ void {{funcid}}({{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol, int 
 			sol[i*N+tid] = sol_copy[i];
 		}
 
+		/*
 		k = 0;
 		for (int i = 0; i < {{ndim}}; ++i) {
 			for (int j = 0; j <= i; ++j) {
@@ -518,6 +519,7 @@ void {{funcid}}({{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol, int 
 				++k;
 			}
 		}
+		*/
 	}
 }
 """)

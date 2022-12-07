@@ -1,6 +1,8 @@
 import cupy as cp
 from enum import Enum
 
+import math
+
 
 class CudaLinkage(Enum):
 	GLOBAL = 1

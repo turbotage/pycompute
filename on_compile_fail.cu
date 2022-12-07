@@ -214,14 +214,13 @@ void k_gmw81_solver_4_f(float* mat, const float* rhs, float* sol, int N)
 			sol[i*N+tid] = sol_copy[i];
 		}
 
-		/*
-		k = 0;
+		int k = 0;
 		for (int i = 0; i < 4; ++i) {
 			for (int j = 0; j <= i; ++j) {
 				mat[k*N+tid] = mat_copy[i*4+j];
 				++k;
 			}
 		}
-		*/
+
 	}
 }
