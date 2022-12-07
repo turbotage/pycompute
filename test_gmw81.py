@@ -27,6 +27,7 @@ mat_old = mat.copy()
 
 
 gmw81solcu.run(mat, rhs, sol)
+print(rhs[:,0])
 
 for i in range(0,batch_size):
     A = cuda_cp.compact_to_full(mat_old[:,i])

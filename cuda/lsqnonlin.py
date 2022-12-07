@@ -867,7 +867,7 @@ class SecondOrderLevenbergMarquardt(CudaFunction):
 		self.lower_bound_t = lower_bound_t
 		self.upper_bound_t = upper_bound_t
 
-		self.lam_t = 5*cp.ones((1, self.batch_size), dtype=self.dtype)
+		self.lam_t = 100*cp.ones((1, self.batch_size), dtype=self.dtype)
 		self.step_t = cp.empty((self.nparam, self.batch_size), dtype=self.dtype)
 		self.res_t = cp.empty((1, self.Nelem), dtype=self.dtype)
 		self.jac_t = cp.empty((self.nparam, self.Nelem), dtype=self.dtype)
@@ -898,11 +898,11 @@ class SecondOrderLevenbergMarquardt(CudaFunction):
 			self.h_t.fill(0.0)
 			self.hl_t.fill(0.0)
 
-			self.gradcu.run(self.pars_t, self.consts_t, self.data_t, self.lam_t, 
+			self.gradcu.run(self.pars_t, self.consts_t, self.data_t, self.lam_t,
 				self.res_t, self.jac_t, self.grad_t, self.hes_t, self.hesl_t)
 			self.gradsumcu.run(self.res_t, self.grad_t, self.hes_t, self.hesl_t, 
 				self.f_t, self.g_t, self.h_t, self.hl_t)
-			self.gmw81solcu.run(self.hl_t, -self.g_t, self.step_t)
+			self.gmw81solcu.run(self.hl_t, self.g_t, self.step_t)
 
 			#self.pars_tp_t += cp.nan_to_num(self.pars_t + self.step_t, posinf=0.0, neginf=0.0)
 			self.pars_t -= 0.1*cp.nan_to_num(self.step_t, posinf=0.0, neginf=0.0)
