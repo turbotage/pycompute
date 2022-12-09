@@ -202,6 +202,9 @@ def code_gen_walking(func: CudaFunction, code: str):
 
 	return code
 
+def print_shape_type_contig(tensor: cp.ndarray):
+	print(tensor.shape, tensor.dtype, tensor._c_contiguous)
+
 def compact_to_full(mat):
 	nmat = mat.shape[0]
 	n = math.floor(math.sqrt(2*nmat))

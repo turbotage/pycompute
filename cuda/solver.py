@@ -419,19 +419,49 @@ def gmw81_solver_code(ndim: int, dtype: cp.dtype):
 """
 __device__
 void {{funcid}}({{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol) {
+	// Diagonal pivoting of matrix and right hand side
 	int perm[{{ndim}}];
 	{{fp_type}} arr1[{{ndim}}];
 	{{fp_type}} arr2[{{ndim}}];
 	{{diag_pivot_funcid}}(mat, perm);
-	{{gmw81_funcid}}(mat);
 	{{permute_vec_funcid}}(rhs, perm, arr1);
+	
+	// Diagonaly scale the matrix and rhs to improve condition number
+	{{fp_type}} scale[{{ndim}}];
+	for (int i = 0; i < {{ndim}}; ++i) {
+		scale[i] = {{sqrt_func}}({{abs_func}}(mat[i*{{ndim}}+i]));
+		arr1[i] /= scale[i];
+	}
+	for (int i = 0; i < {{ndim}}; ++i) {
+		for (int j = 0; j <= i; ++j) {
+			mat[i*{{ndim}}+j] /= (scale[i] * scale[j]);
+		}
+	}
+
+	{{gmw81_funcid}}(mat);
 	{{ldl_solve_funcid}}(mat, arr1, arr2);
-	//{{ldl_solve_funcid}}(mat, rhs, sol);
+
+	// Unscale
+	for (int i = 0; i < {{ndim}}; ++i) {
+		arr2[i] /= scale[i];
+	}
+
+	// Unpivot solution
 	{{inv_permute_vec_funcid}}(arr2, perm, sol);
 }
 """)
 
 	type: str = ctc.check_fp32_or_fp64(CudaTensor(None, dtype), 'gmw81_solver')
+	abs_func: str
+	sqrt_func: str
+	if dtype == cp.float32:
+		abs_func = 'fabsf'
+		sqrt_func = 'sqrtf'
+	else:
+		abs_func = 'fabs'
+		sqrt_func = 'sqrt'
+
+
 
 	funcid = gmw81_solver_funcid(ndim, dtype)
 	diag_pivot_fid = permute.diag_pivot_funcid(ndim, dtype)
@@ -442,7 +472,8 @@ void {{funcid}}({{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol) {
 	
 
 	return codestr.render(funcid=funcid, fp_type=type, ndim=ndim, diag_pivot_funcid=diag_pivot_fid,
-		gmw81_funcid=gmw81_fid, permute_vec_funcid=permv_fid, ldl_solve_funcid=ldlsol_fid, inv_permute_vec_funcid=ipermv_fid)
+		gmw81_funcid=gmw81_fid, permute_vec_funcid=permv_fid, ldl_solve_funcid=ldlsol_fid, 
+		inv_permute_vec_funcid=ipermv_fid, abs_func=abs_func, sqrt_func=sqrt_func)
 
 class GMW81Solver(CudaFunction):
 	def __init__(self, ndim: int, dtype: cp.dtype, write_to_file: bool = False):
@@ -480,7 +511,7 @@ class GMW81Solver(CudaFunction):
 		temp = Template(
 """
 extern \"C\" __global__
-void {{funcid}}({{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol, int N) 
+void {{funcid}}(const {{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol, int N) 
 {
 	int tid = blockDim.x * blockIdx.x + threadIdx.x;
 	if (tid < N) {
@@ -492,9 +523,6 @@ void {{funcid}}({{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol, int 
 		for (int i = 0; i < {{ndim}}; ++i) {
 			rhs_copy[i] = rhs[i*N+tid];
 			sol_copy[i] = sol[i*N+tid];
-			if (tid == 0) {
-				printf("rhs[%d]=%f\\n", i, rhs_copy[i]);
-			}
 		}
 
 		int k = 0;
@@ -514,16 +542,6 @@ void {{funcid}}({{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol, int 
 		for (int i = 0; i < {{ndim}}; ++i) {
 			sol[i*N+tid] = sol_copy[i];
 		}
-
-		/*
-		k = 0;
-		for (int i = 0; i < {{ndim}}; ++i) {
-			for (int j = 0; j <= i; ++j) {
-				mat[k*N+tid] = mat_copy[i*{{ndim}}+j];
-				++k;
-			}
-		}
-		*/
 	}
 }
 """)

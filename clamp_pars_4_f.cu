@@ -1,23 +1,19 @@
 
 __device__
-bool clamp_pars_4_f(const float* lower_bound, const float* upper_bound, float* pars, int tid, int N) 
+void clamp_pars_4_f(const float* lower_bound, const float* upper_bound, float* pars, int tid, int N) 
 {
-	bool clamped = false;
 	for (int i = 0; i < 4; ++i) {
 		int index = i*N+tid;
 		float p = pars[index];
-		float u = upper_bound[i*N+tid];
-		float l = lower_bound[i*N+tid];
+		float u = upper_bound[index];
+		float l = lower_bound[index];
+
 		if (p > u) {
-			clamped = true;
 			pars[index] = u;
 		} else if (p < l) {
-			clamped = true;
 			pars[index] = l;
 		}
 	}
-
-	return clamped;
 }
 
 extern "C" __global__

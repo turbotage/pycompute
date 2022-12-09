@@ -200,18 +200,20 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp
 	for (int i = 0; i < {{nparam}}; ++i) {
 		for (int j = 0; j <= i; ++j) {
 			{{fp_type}} jtemp = jac[i*Nelem+tid] * jac[j*Nelem+tid];
-			hes[k*Nelem+tid] += jtemp;
+			int kidx = k*Nelem+tid;
+			hes[kidx] += jtemp;
 			if (i != j) {
-				hesl[k*Nelem+tid] = hes[k*Nelem+tid];
+				hesl[kidx] = hes[kidx];
 			} else {
-				hesl[k*Nelem+tid] = hes[k*Nelem+tid] + lam[tid]*jtemp;
+				hesl[kidx] = hes[kidx] + lam[tid]*jtemp;
 			}
 			++k;
 		}
 	}
 
 	for (int i = 0; i < {{nparam}}; ++i) {
-		grad[i*Nelem+tid] = jac[i*Nelem+tid] * res[tid];
+		int iidx = i*Nelem+tid;
+		grad[iidx] = jac[iidx] * res[tid];
 	}
 }
 """)
@@ -489,14 +491,14 @@ void {{funcid}}(const {{fp_type}}* f, const {{fp_type}}* ftp, const {{fp_type}}*
 	const {{fp_type}}* g, const {{fp_type}}* h, {{fp_type}}* pars, 
 	{{fp_type}}* lam, char* step_type, {{fp_type}} mu, {{fp_type}} eta, {{fp_type}} acc, {{fp_type}} dec, int tid, int N) 
 {
-	{{fp_type}} actual = f[tid] - ftp[tid];
+	{{fp_type}} actual = 0.5f * (f[tid] - ftp[tid]);
 	{{fp_type}} predicted = 0.0f;
 
 	int k = 0;
 	for (int i = 0; i < {{nparam}}; ++i) {
 		for (int j = 0; j <= i; ++j) {
 			float entry = h[k*N+tid] * step[i*N+tid] * step[j*N+tid];
-			if (i != j) {
+			if (i == j) {
 				predicted -= entry;
 			} else {
 				predicted -= 2.0f * entry;
@@ -507,14 +509,20 @@ void {{funcid}}(const {{fp_type}}* f, const {{fp_type}}* ftp, const {{fp_type}}*
 	predicted *= 0.5f;
 
 	for (int i = 0; i < {{nparam}}; ++i) {
-		predicted -= step[i*N+tid] * g[i*N+tid];
+		int iidx = i*N+tid;
+		predicted += step[iidx] * g[iidx];
 	}
 
 	{{fp_type}} rho = actual / predicted;
 
+	if (tid == 0) {
+		printf("rho=%f, actual=%f, pred=%f\\n", rho, actual, predicted);
+	}
+
 	if (rho > mu && actual > 0) {
 		for (int i = 0; i < {{nparam}}; ++i) {
-			pars[i*N+tid] = pars_tp[i*N+tid];
+			int iidx = i*N+tid;
+			pars[iidx] = pars_tp[iidx];
 		}
 		if (rho > eta) {
 			lam[tid] /= acc;
@@ -541,7 +549,6 @@ void {{funcid}}(const {{fp_type}}* f, const {{fp_type}}* ftp, const {{fp_type}}*
 
 class GainRatioStep(CudaFunction):
 	def __init__(self, nparam: int, dtype: cp.dtype, write_to_file: bool = False):
-		
 		self.funcid = gain_ratio_step_funcid(nparam, dtype)
 		self.code = gain_ratio_step_code(nparam, dtype)
 
@@ -624,24 +631,20 @@ def clamp_pars_code(nparam: int, dtype: cp.dtype):
 	temp = Template(
 """
 __device__
-bool {{funcid}}(const {{fp_type}}* lower_bound, const {{fp_type}}* upper_bound, {{fp_type}}* pars, int tid, int N) 
+void {{funcid}}(const {{fp_type}}* lower_bound, const {{fp_type}}* upper_bound, {{fp_type}}* pars, int tid, int N) 
 {
-	bool clamped = false;
 	for (int i = 0; i < {{nparam}}; ++i) {
 		int index = i*N+tid;
 		{{fp_type}} p = pars[index];
-		{{fp_type}} u = upper_bound[i*N+tid];
-		{{fp_type}} l = lower_bound[i*N+tid];
+		{{fp_type}} u = upper_bound[index];
+		{{fp_type}} l = lower_bound[index];
+
 		if (p > u) {
-			clamped = true;
 			pars[index] = u;
 		} else if (p < l) {
-			clamped = true;
 			pars[index] = l;
 		}
 	}
-
-	return clamped;
 }
 """)
 
@@ -846,20 +849,42 @@ void {{funcid}}(const float* pars, const float* grad, const {{fp_type}}* lower_b
 
 
 class SecondOrderLevenbergMarquardt(CudaFunction):
-	def __init__(self, expr, pars_str, consts_str, pars_t, consts_t, data_t, lower_bound_t, upper_bound_t, write_to_file: bool = False):
-		self.nparam = pars_t.shape[0]
-		self.dtype = pars_t.dtype
+	def __init__(self, expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype, write_to_file: bool = False):
+		self.nparam = len(pars_str)
 		self.nhes = round(self.nparam * (self.nparam + 1) / 2)
-		self.nconst = consts_t.shape[0]
-		self.batch_size = pars_t.shape[1]
-		self.Nelem = data_t.shape[1]
-		self.ndata = round(self.Nelem / self.batch_size)
+		self.nconst = len(consts_str)
+		self.ndata = ndata
+		self.dtype = dtype
 
 		self.write_to_file = write_to_file
 
 		self.expr = expr
-		self.pars_str = pars_str
-		self.consts_str = consts_str
+		self.pars_str = pars_str.copy()
+		self.consts_str = consts_str.copy()
+
+		self.gradcu = ResJacGradHesHesl(self.expr, self.pars_str.copy(), self.consts_str.copy(), self.ndata, self.dtype, self.write_to_file)
+		#self.gradcu.build()
+		self.gradsumcu = SumResGradHesHesl(self.nparam, self.ndata, self.dtype, self.write_to_file)
+		#self.gradsumcu.build()
+		self.gmw81solcu = solver.GMW81Solver(self.nparam, self.dtype, self.write_to_file)
+		#self.gmw81solcu.build()
+		self.rescu = ResF(self.expr, self.pars_str.copy(), self.consts_str.copy(), self.ndata, self.dtype, self.write_to_file)
+		#self.rescu.build()
+		self.gaincu = GainRatioStep(self.nparam, self.dtype, self.write_to_file)
+		#self.gaincu.build()
+		self.clampcu = ClampPars(self.nparam, self.dtype, self.write_to_file)
+		#self.clampcu.build()
+		self.convcu = GradientConvergence(self.nparam, self.dtype, self.write_to_file)
+		#self.convcu.build()
+
+		self.batch_size = int(1)
+		self.Nelem = self.batch_size * self.ndata
+
+	def setup(self, pars_t, consts_t, data_t, lower_bound_t, upper_bound_t):
+		self.batch_size = pars_t.shape[1]
+		self.Nelem = data_t.shape[1]
+		if round(self.Nelem / self.batch_size) != self.ndata:
+			raise RuntimeError('Nelem to batch_size ratio does not equal ndata')
 
 		self.pars_t = pars_t
 		self.consts_t = consts_t
@@ -882,14 +907,6 @@ class SecondOrderLevenbergMarquardt(CudaFunction):
 		self.hl_t = cp.empty((self.nhes, self.batch_size), dtype=self.dtype)
 		self.pars_tp_t = cp.empty((self.nparam, self.batch_size), dtype=self.dtype)
 
-		self.gradcu = ResJacGradHesHesl(self.expr, self.pars_str, self.consts_str, self.ndata, self.dtype, self.write_to_file)
-		self.gradsumcu = SumResGradHesHesl(self.nparam, self.ndata, self.dtype, self.write_to_file)
-		self.gmw81solcu = solver.GMW81Solver(self.nparam, self.dtype, self.write_to_file)
-		self.rescu = ResF(self.expr, self.pars_str, self.consts_str, self.ndata, self.dtype, self.write_to_file)
-		self.gaincu = GainRatioStep(self.nparam, self.dtype, self.write_to_file)
-		self.clampcu = ClampPars(self.nparam, self.dtype, self.write_to_file)
-		self.convcu = GradientConvergence(self.nparam, self.dtype, self.write_to_file)
-
 	def run(self, iters: int, tol: float):
 		for i in range(0,iters):
 			self.f_t.fill(0.0)
@@ -898,22 +915,26 @@ class SecondOrderLevenbergMarquardt(CudaFunction):
 			self.h_t.fill(0.0)
 			self.hl_t.fill(0.0)
 
+			print(self.pars_t[:,700000])
+
 			self.gradcu.run(self.pars_t, self.consts_t, self.data_t, self.lam_t,
 				self.res_t, self.jac_t, self.grad_t, self.hes_t, self.hesl_t)
 			self.gradsumcu.run(self.res_t, self.grad_t, self.hes_t, self.hesl_t, 
 				self.f_t, self.g_t, self.h_t, self.hl_t)
 			self.gmw81solcu.run(self.hl_t, self.g_t, self.step_t)
+			
+			#self.step_t = cp.nan_to_num(self.step_t, copy=False, posinf=0.0, neginf=0.0)
+			cp.subtract(self.pars_t, self.step_t, out=self.pars_tp_t)
 
-			#self.pars_tp_t += cp.nan_to_num(self.pars_t + self.step_t, posinf=0.0, neginf=0.0)
-			self.pars_t -= 0.1*cp.nan_to_num(self.step_t, posinf=0.0, neginf=0.0)
+			self.rescu.run(self.pars_tp_t, self.consts_t, self.data_t, self.res_t, self.ftp_t)
+			self.gaincu.run(self.f_t, self.ftp_t, self.pars_tp_t, self.step_t, 
+			   self.g_t, self.h_t, self.pars_t, self.lam_t, self.step_type_t)
 
-			#self.rescu.run(self.pars_tp_t, self.consts_t, self.data_t, self.res_t, self.ftp_t)
-			#self.gaincu.run(self.f_t, self.ftp_t, self.pars_tp_t, self.step_t, 
-			#    self.grad_t, self.hes_t, self.pars_t, self.lam_t, self.step_type_t)
-			#self.clampcu.run(self.lower_bound_t, self.upper_bound_t, self.pars_t)
-			#self.convcu.run(self.pars_t, self.grad_t, self.lower_bound_t, 
-			#    self.upper_bound_t, self.step_type_t, cp.float32(tol))
+			self.clampcu.run(self.lower_bound_t, self.upper_bound_t, self.pars_t)
+			
+			print(self.pars_t[:,700000])
+			#self.convcu.run(self.pars_t, self.g_t, self.lower_bound_t, 
+			#   self.upper_bound_t, self.step_type_t, cp.float32(tol))
 
-		return self.pars_t
 
 

@@ -45,18 +45,20 @@ void res_jac_grad_hes_hesl_4_1_21_f_f7def86f0a03(const float* params, const floa
 	for (int i = 0; i < 4; ++i) {
 		for (int j = 0; j <= i; ++j) {
 			float jtemp = jac[i*Nelem+tid] * jac[j*Nelem+tid];
-			hes[k*Nelem+tid] += jtemp;
+			int kidx = k*Nelem+tid;
+			hes[kidx] += jtemp;
 			if (i != j) {
-				hesl[k*Nelem+tid] = hes[k*Nelem+tid];
+				hesl[kidx] = hes[kidx];
 			} else {
-				hesl[k*Nelem+tid] = hes[k*Nelem+tid] + lam[tid]*jtemp;
+				hesl[kidx] = hes[kidx] + lam[tid]*jtemp;
 			}
 			++k;
 		}
 	}
 
 	for (int i = 0; i < 4; ++i) {
-		grad[i*Nelem+tid] = jac[i*Nelem+tid] * res[tid];
+		int iidx = i*Nelem+tid;
+		grad[iidx] = jac[iidx] * res[tid];
 	}
 }
 

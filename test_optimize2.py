@@ -49,13 +49,17 @@ if redo_pars_t:
 pars_dipy, affine = load_nifti('pars_dipy.nii')
 pars_dipy = np.float32(pars_dipy)[:,:,15:35,:]
 
-lower_bound = np.float32(np.ascontiguousarray(
-				np.tile(
-					np.array([np.finfo(np.float32).min / 2, 0.0, 0.0, 0.0]), (data.shape[1],1)).transpose()))
+lower_bound = cp.empty((4, nvoxels), dtype=np.float32)
+lower_bound[0,:] = np.finfo(np.float32).min
+lower_bound[1,:] = 0.0
+lower_bound[2,:] = 0.0
+lower_bound[3,:] = 0.0
 
-upper_bound = np.float32(np.ascontiguousarray(
-				np.tile(
-					np.array([np.finfo(np.float32).max / 2, 1.0, 1.0, 1.0]), (data.shape[1],1)).transpose()))
+upper_bound = cp.empty((4, nvoxels), dtype=np.float32)
+upper_bound[0,:] = np.finfo(np.float32).max / 2
+upper_bound[1,:] = 1.0
+upper_bound[2,:] = 1.0
+upper_bound[3,:] = 1.0
 
 print('After DIPY loads')
 
@@ -134,6 +138,8 @@ data_flat[:,0:21] = np.reshape(np.array([908.02686, 905.39154, 906.08997, 700.78
 
 pars_flat[:,0] = np.array([700.0, 0.2, 0.1, 0.001])
 
+solm = clsq.SecondOrderLevenbergMarquardt(expr, pars_str, consts_str, ndata=21, dtype=cp.float32, write_to_file=True)
+
 start = time.time()
 for i in range(0,nchunks):
 
@@ -143,8 +149,8 @@ for i in range(0,nchunks):
 	lower_bound_cu = cp.array(lower_bound[:,i*chunk_size:(i+1)*chunk_size], dtype=cp.float32, copy=True)
 	upper_bound_cu = cp.array(upper_bound[:,i*chunk_size:(i+1)*chunk_size], dtype=cp.float32, copy=True)
 
-	solm = clsq.SecondOrderLevenbergMarquardt(expr, pars_str, consts_str, parscu, constscu, datacu, lower_bound_cu, upper_bound_cu, write_to_file = True)
-	parscu = solm.run(200, 1e-5)
+	solm.setup(parscu, constscu, datacu, lower_bound_cu, upper_bound_cu)
+	solm.run(30, 1e-5)
 	
 	pars_flat[:,i*chunk_size:(i+1)*chunk_size] = parscu.get()
 	del solm
@@ -169,4 +175,4 @@ param_printer(pars_dipy, slicez=15, clim=[0.0, 25000], viewport=[[0.0, 1.0],[0.0
 
 param_printer(pars_flat_back, slicez=15, clim=[0.0, 25000], viewport=[[0.0, 1.0],[0.0, 1.0]], print_S0=True)
 
-
+input("Press Enter...")
