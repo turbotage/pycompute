@@ -170,23 +170,48 @@ void inv_permute_vec_4_f(const float* vec, const int* perm, float* ovec) {
 }
 
 __device__
-void gmw81_solver_4_f(float* mat, const float* rhs, float* sol) {
+void gmw81_solver_4_f(float* mat, const float* rhs, float* sol) {	
+	// Diagonal pivoting of matrix and right hand side
 	int perm[4];
 	float arr1[4];
 	float arr2[4];
 	diag_pivot_4_f(mat, perm);
-	gmw81_4_f(mat);
 	permute_vec_4_f(rhs, perm, arr1);
+	
+	// Diagonaly scale the matrix and rhs to improve condition number
+	float scale[4];
+	for (int i = 0; i < 4; ++i) {
+		scale[i] = sqrtf(fabsf(mat[i*4+i]));
+		arr1[i] /= scale[i];
+	}
+	for (int i = 0; i < 4; ++i) {
+		for (int j = 0; j <= i; ++j) {
+			mat[i*4+j] /= (scale[i] * scale[j]);
+		}
+	}
+
+	gmw81_4_f(mat);
 	ldl_solve_4_f(mat, arr1, arr2);
-	//ldl_solve_4_f(mat, rhs, sol);
+
+	// Unscale
+	for (int i = 0; i < 4; ++i) {
+		arr2[i] /= scale[i];
+	}
+
+	// Unpivot solution
 	inv_permute_vec_4_f(arr2, perm, sol);
 }
 
 extern "C" __global__
-void k_gmw81_solver_4_f(float* mat, const float* rhs, float* sol, int N) 
+void k_gmw81_solver_4_f(const float* mat, const float* rhs, const char* step_type, float* sol, int N) 
 {
 	int tid = blockDim.x * blockIdx.x + threadIdx.x;
+
 	if (tid < N) {
+
+		if (step_type[tid] == 0) {
+			return;
+		}
 
 		float mat_copy[4*4];
 		float rhs_copy[4];
@@ -196,6 +221,7 @@ void k_gmw81_solver_4_f(float* mat, const float* rhs, float* sol, int N)
 			rhs_copy[i] = rhs[i*N+tid];
 			sol_copy[i] = sol[i*N+tid];
 		}
+
 		int k = 0;
 		for (int i = 0; i < 4; ++i) {
 			for (int j = 0; j <= i; ++j) {
@@ -213,14 +239,5 @@ void k_gmw81_solver_4_f(float* mat, const float* rhs, float* sol, int N)
 		for (int i = 0; i < 4; ++i) {
 			sol[i*N+tid] = sol_copy[i];
 		}
-
-		int k = 0;
-		for (int i = 0; i < 4; ++i) {
-			for (int j = 0; j <= i; ++j) {
-				mat[k*N+tid] = mat_copy[i*4+j];
-				++k;
-			}
-		}
-
 	}
 }

@@ -418,7 +418,7 @@ def gmw81_solver_code(ndim: int, dtype: cp.dtype):
 	codestr = Template(
 """
 __device__
-void {{funcid}}({{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol) {
+void {{funcid}}({{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol) {	
 	// Diagonal pivoting of matrix and right hand side
 	int perm[{{ndim}}];
 	{{fp_type}} arr1[{{ndim}}];
@@ -488,14 +488,14 @@ class GMW81Solver(CudaFunction):
 		self.mod = None
 		self.run_func = None
 
-	def run(self, mat, rhs, sol):
+	def run(self, mat, rhs, step_type, sol):
 		if self.run_func == None:
 			self.build()
 
 		N = mat.shape[1]
 		Nthreads = 32
 		blockSize = math.ceil(N / Nthreads)
-		self.run_func((blockSize,),(Nthreads,),(mat, rhs, sol, N))
+		self.run_func((blockSize,),(Nthreads,),(mat, rhs, step_type, sol, N))
 
 	def get_device_funcid(self):
 		return self.funcid
@@ -511,10 +511,15 @@ class GMW81Solver(CudaFunction):
 		temp = Template(
 """
 extern \"C\" __global__
-void {{funcid}}(const {{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol, int N) 
+void {{funcid}}(const {{fp_type}}* mat, const {{fp_type}}* rhs, const char* step_type, {{fp_type}}* sol, int N) 
 {
 	int tid = blockDim.x * blockIdx.x + threadIdx.x;
+
 	if (tid < N) {
+
+		if (step_type[tid] == 0) {
+			return;
+		}
 
 		{{fp_type}} mat_copy[{{ndim}}*{{ndim}}];
 		{{fp_type}} rhs_copy[{{ndim}}];
@@ -561,7 +566,7 @@ void {{funcid}}(const {{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol
 	def build(self):
 		cc = cudap.code_gen_walking(self, "")
 		if self.write_to_file:
-			with open(self.get_device_funcid(), "w") as f:
+			with open(self.get_device_funcid()+'.cu', "w") as f:
 				f.write(cc)
 		try:
 			self.mod = cp.RawModule(code=cc)

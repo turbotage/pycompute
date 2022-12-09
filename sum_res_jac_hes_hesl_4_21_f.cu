@@ -1,9 +1,14 @@
 
 __device__
-void sum_res_jac_hes_hesl_4_21_f(const float* res, const float* grad, const float* hes, const float* hesl,
+void sum_res_jac_hes_hesl_4_21_f(const float* res, const float* grad, const float* hes, const float* hesl, const char* step_type,
 	float* f, float* g, float* h, float* hl, int tid, int N, int Nelem) 
 {
+
 	int bucket = tid / 21;
+	if (step_type[bucket] == 0) {
+		return;
+	}
+
 	float rtid = res[tid];
 	atomicAdd(&f[bucket], rtid*rtid);
 	for (int i = 0; i < 4; ++i) {
@@ -18,11 +23,11 @@ void sum_res_jac_hes_hesl_4_21_f(const float* res, const float* grad, const floa
 }
 
 extern "C" __global__
-void k_sum_res_jac_hes_hesl_4_21_f(const float* res, const float* grad, const float* hes, const float* hesl,
+void k_sum_res_jac_hes_hesl_4_21_f(const float* res, const float* grad, const float* hes, const float* hesl, const char* step_type,
 	float* f, float* g, float* h, float* hl, int N, int Nelem) 
 {
 	int tid = blockDim.x * blockIdx.x + threadIdx.x;
 	if (tid < Nelem) {
-		sum_res_jac_hes_hesl_4_21_f(res, grad, hes, hesl, f, g, h, hl, tid, N, Nelem);
+		sum_res_jac_hes_hesl_4_21_f(res, grad, hes, hesl, step_type, f, g, h, hl, tid, N, Nelem);
 	}
 }

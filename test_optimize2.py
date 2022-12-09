@@ -128,7 +128,7 @@ expr = 'S0*(f*exp(-b*D_1)+(1-f)*exp(-b*D_2))'
 pars_str = ['S0', 'f', 'D_1', 'D_2']
 consts_str = ['b']
 
-nchunks = 1
+nchunks = 4
 chunk_size = math.ceil(nvoxels / nchunks)
 
 data_flat[:,0:21] = np.reshape(np.array([908.02686, 905.39154, 906.08997, 700.7829, 753.0848, 859.9136,
@@ -153,7 +153,6 @@ for i in range(0,nchunks):
 	solm.run(30, 1e-5)
 	
 	pars_flat[:,i*chunk_size:(i+1)*chunk_size] = parscu.get()
-	del solm
 
 	#time.sleep(5)
 

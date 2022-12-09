@@ -4,6 +4,10 @@ void gain_ratio_step_4_f(const float* f, const float* ftp, const float* pars_tp,
 	const float* g, const float* h, float* pars, 
 	float* lam, char* step_type, float mu, float eta, float acc, float dec, int tid, int N) 
 {
+	if (step_type[tid] == 0) {
+		return;
+	}
+
 	float actual = 0.5f * (f[tid] - ftp[tid]);
 	float predicted = 0.0f;
 
@@ -28,10 +32,6 @@ void gain_ratio_step_4_f(const float* f, const float* ftp, const float* pars_tp,
 
 	float rho = actual / predicted;
 
-	if (tid == 0) {
-		printf("rho=%f, actual=%f, pred=%f\n", rho, actual, predicted);
-	}
-
 	if (rho > mu && actual > 0) {
 		for (int i = 0; i < 4; ++i) {
 			int iidx = i*N+tid;
@@ -51,6 +51,10 @@ void gain_ratio_step_4_f(const float* f, const float* ftp, const float* pars_tp,
 	if (predicted < 0) {
 		lam[tid] *= dec;
 		step_type[tid] |= 8;
+	}
+
+	if (tid == 0) {
+		printf("rho=%f, actual=%f, pred=%f, step_type=%d\n", rho, actual, predicted, step_type[tid]);
 	}
 
 }

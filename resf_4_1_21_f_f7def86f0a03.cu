@@ -1,10 +1,14 @@
 
 __device__
-void resf_4_1_21_f_f7def86f0a03(const float* params, const float* consts, const float* data,
+void resf_4_1_21_f_f7def86f0a03(const float* params, const float* consts, const float* data, const char* step_type,
 	float* res, float* f, int tid, int N, int Nelem) 
 {
 	float pars[4];
 	int bucket = tid / 21;
+	if (step_type[bucket] == 0) {
+		return;
+	}
+
 	for (int i = 0; i < 4; ++i) {
 		pars[i] = params[i*N+bucket];
 	}
@@ -18,11 +22,11 @@ void resf_4_1_21_f_f7def86f0a03(const float* params, const float* consts, const 
 }
 
 extern "C" __global__
-void k_resf_4_1_21_f_f7def86f0a03(const float* params, const float* consts, const float* data,
+void k_resf_4_1_21_f_f7def86f0a03(const float* params, const float* consts, const float* data, const char* step_type,
 	float* res, float* f, int N, int Nelem) 
 {
 	int tid = blockDim.x * blockIdx.x + threadIdx.x;
 	if (tid < N) {
-		resf_4_1_21_f_f7def86f0a03(params, consts, data, res, f, tid, N, Nelem);
+		resf_4_1_21_f_f7def86f0a03(params, consts, data, step_type, res, f, tid, N, Nelem);
 	}
 }

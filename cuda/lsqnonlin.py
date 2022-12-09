@@ -26,11 +26,15 @@ def resf_code(expr: str, pars_str: list[str], consts_str: list[str], ndata: int,
 	rjh_temp = Template(
 """
 __device__
-void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp_type}}* data,
+void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp_type}}* data, const char* step_type,
 	{{fp_type}}* res, {{fp_type}}* f, int tid, int N, int Nelem) 
 {
 	{{fp_type}} pars[{{nparam}}];
 	int bucket = tid / {{ndata}};
+	if (step_type[bucket] == 0) {
+		return;
+	}
+
 	for (int i = 0; i < {{nparam}}; ++i) {
 		pars[i] = params[i*N+bucket];
 	}
@@ -107,7 +111,7 @@ class ResF(CudaFunction):
 		self.mod = None
 		self.run_func = None
 
-	def run(self, pars, consts, data, res, ftp):
+	def run(self, pars, consts, data, step_type, res, ftp):
 		if self.run_func == None:
 			self.build()
 
@@ -116,7 +120,7 @@ class ResF(CudaFunction):
 
 		Nthreads = 32
 		blockSize = math.ceil(Nelem / Nthreads)
-		self.run_func((blockSize,),(Nthreads,),(pars, consts, data, res, ftp, N, Nelem))
+		self.run_func((blockSize,),(Nthreads,),(pars, consts, data, step_type, res, ftp, N, Nelem))
 
 	def get_device_funcid(self):
 		return self.funcid
@@ -132,12 +136,12 @@ class ResF(CudaFunction):
 		temp = Template(
 """
 extern \"C\" __global__
-void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp_type}}* data,
+void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp_type}}* data, const char* step_type,
 	{{fp_type}}* res, {{fp_type}}* f, int N, int Nelem) 
 {
 	int tid = blockDim.x * blockIdx.x + threadIdx.x;
 	if (tid < N) {
-		{{dfuncid}}(params, consts, data, res, f, tid, N, Nelem);
+		{{dfuncid}}(params, consts, data, step_type, res, f, tid, N, Nelem);
 	}
 }
 """)
@@ -178,11 +182,20 @@ def res_jac_grad_hes_hesl_code(expr: str, pars_str: list[str], consts_str: list[
 	rjh_temp = Template(
 """
 __device__
-void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp_type}}* data, const {{fp_type}}* lam,
+void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp_type}}* data, const {{fp_type}}* lam, const char* step_type,
 	{{fp_type}}* res, {{fp_type}}* jac, {{fp_type}}* grad, {{fp_type}}* hes, {{fp_type}}* hesl, int tid, int N, int Nelem) 
 {
+
 	{{fp_type}} pars[{{nparam}}];
 	int bucket = tid / {{ndata}};
+
+	if (tid == Nelem - 1) {
+		printf("bucket=%d\\n", bucket);
+	}
+
+	if (step_type[bucket] == 0) {
+		return;
+	}
 
 	for (int i = 0; i < {{nparam}}; ++i) {
 		pars[i] = params[i*N+bucket];
@@ -309,7 +322,7 @@ class ResJacGradHesHesl(CudaFunction):
 		self.mod = None
 		self.run_func = None
 
-	def run(self, pars, consts, data, lam, res, jac, grad, hes, hesl):
+	def run(self, pars, consts, data, lam, step_type, res, jac, grad, hes, hesl):
 		if self.run_func == None:
 			self.build()
 
@@ -318,7 +331,7 @@ class ResJacGradHesHesl(CudaFunction):
 
 		Nthreads = 32
 		blockSize = math.ceil(Nelem / Nthreads)
-		self.run_func((blockSize,),(Nthreads,),(pars, consts, data, lam, res, jac, grad, hes, hesl, N, Nelem))
+		self.run_func((blockSize,),(Nthreads,),(pars, consts, data, lam, step_type, res, jac, grad, hes, hesl, N, Nelem))
 
 	def get_device_funcid(self):
 		return self.funcid
@@ -334,13 +347,13 @@ class ResJacGradHesHesl(CudaFunction):
 		temp = Template(
 """
 extern \"C\" __global__
-void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp_type}}* data, const {{fp_type}}* lam,
+void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp_type}}* data, const {{fp_type}}* lam, const char* step_type,
 	{{fp_type}}* res, {{fp_type}}* jac, {{fp_type}}* grad, {{fp_type}}* hes, {{fp_type}}* hesl, int N, int Nelem) 
 {
 	int tid = blockDim.x * blockIdx.x + threadIdx.x;
 
 	if (tid < Nelem) {
-		{{dfuncid}}(params, consts, data, lam, res, jac, grad, hes, hesl, tid, N, Nelem);
+		{{dfuncid}}(params, consts, data, lam, step_type, res, jac, grad, hes, hesl, tid, N, Nelem);
 	}
 }
 """)
@@ -379,10 +392,15 @@ def sum_res_grad_hes_hesl_code(nparam: int, ndata: int, dtype: cp.dtype):
 	temp = Template(
 """
 __device__
-void {{funcid}}(const {{fp_type}}* res, const {{fp_type}}* grad, const {{fp_type}}* hes, const {{fp_type}}* hesl,
+void {{funcid}}(const {{fp_type}}* res, const {{fp_type}}* grad, const {{fp_type}}* hes, const {{fp_type}}* hesl, const char* step_type,
 	{{fp_type}}* f, {{fp_type}}* g, {{fp_type}}* h, {{fp_type}}* hl, int tid, int N, int Nelem) 
 {
+
 	int bucket = tid / {{ndata}};
+	if (step_type[bucket] == 0) {
+		return;
+	}
+
 	float rtid = res[tid];
 	atomicAdd(&f[bucket], rtid*rtid);
 	for (int i = 0; i < {{nparam}}; ++i) {
@@ -418,7 +436,7 @@ class SumResGradHesHesl(CudaFunction):
 		self.mod = None
 		self.run_func = None
 
-	def run(self, res, grad, hes, hesl, f, g, h, hl):
+	def run(self, res, grad, hes, hesl, step_type, f, g, h, hl):
 		if self.run_func == None:
 			self.build()
 
@@ -426,7 +444,7 @@ class SumResGradHesHesl(CudaFunction):
 		N = round(Nelem / self.ndata)
 		Nthreads = 32
 		blockSize = math.ceil(Nelem / Nthreads)
-		self.run_func((blockSize,),(Nthreads,),(res, grad, hes, hesl, f, g, h, hl, N, Nelem))
+		self.run_func((blockSize,),(Nthreads,),(res, grad, hes, hesl, step_type, f, g, h, hl, N, Nelem))
 
 	def get_device_funcid(self):
 		return self.funcid
@@ -442,12 +460,12 @@ class SumResGradHesHesl(CudaFunction):
 		temp = Template(
 """
 extern \"C\" __global__
-void {{funcid}}(const {{fp_type}}* res, const {{fp_type}}* grad, const {{fp_type}}* hes, const {{fp_type}}* hesl,
+void {{funcid}}(const {{fp_type}}* res, const {{fp_type}}* grad, const {{fp_type}}* hes, const {{fp_type}}* hesl, const char* step_type,
 	{{fp_type}}* f, {{fp_type}}* g, {{fp_type}}* h, {{fp_type}}* hl, int N, int Nelem) 
 {
 	int tid = blockDim.x * blockIdx.x + threadIdx.x;
 	if (tid < Nelem) {
-		{{dfuncid}}(res, grad, hes, hesl, f, g, h, hl, tid, N, Nelem);
+		{{dfuncid}}(res, grad, hes, hesl, step_type, f, g, h, hl, tid, N, Nelem);
 	}
 }
 """)
@@ -491,6 +509,10 @@ void {{funcid}}(const {{fp_type}}* f, const {{fp_type}}* ftp, const {{fp_type}}*
 	const {{fp_type}}* g, const {{fp_type}}* h, {{fp_type}}* pars, 
 	{{fp_type}}* lam, char* step_type, {{fp_type}} mu, {{fp_type}} eta, {{fp_type}} acc, {{fp_type}} dec, int tid, int N) 
 {
+	if (step_type[tid] == 0) {
+		return;
+	}
+
 	{{fp_type}} actual = 0.5f * (f[tid] - ftp[tid]);
 	{{fp_type}} predicted = 0.0f;
 
@@ -515,10 +537,6 @@ void {{funcid}}(const {{fp_type}}* f, const {{fp_type}}* ftp, const {{fp_type}}*
 
 	{{fp_type}} rho = actual / predicted;
 
-	if (tid == 0) {
-		printf("rho=%f, actual=%f, pred=%f\\n", rho, actual, predicted);
-	}
-
 	if (rho > mu && actual > 0) {
 		for (int i = 0; i < {{nparam}}; ++i) {
 			int iidx = i*N+tid;
@@ -538,6 +556,10 @@ void {{funcid}}(const {{fp_type}}* f, const {{fp_type}}* ftp, const {{fp_type}}*
 	if (predicted < 0) {
 		lam[tid] *= dec;
 		step_type[tid] |= 8;
+	}
+
+	if (tid == 0) {
+		printf("rho=%f, actual=%f, pred=%f, step_type=%d\\n", rho, actual, predicted, step_type[tid]);
 	}
 
 }
@@ -631,8 +653,12 @@ def clamp_pars_code(nparam: int, dtype: cp.dtype):
 	temp = Template(
 """
 __device__
-void {{funcid}}(const {{fp_type}}* lower_bound, const {{fp_type}}* upper_bound, {{fp_type}}* pars, int tid, int N) 
+void {{funcid}}(const {{fp_type}}* lower_bound, const {{fp_type}}* upper_bound, const char* step_type, {{fp_type}}* pars, int tid, int N) 
 {
+	if (step_type[tid] == 0) {
+		return;
+	}
+
 	for (int i = 0; i < {{nparam}}; ++i) {
 		int index = i*N+tid;
 		{{fp_type}} p = pars[index];
@@ -667,7 +693,7 @@ class ClampPars(CudaFunction):
 		self.mod = None
 		self.run_func = None
 
-	def run(self, lower_bound, upper_bound, pars):
+	def run(self, lower_bound, upper_bound, step_type, pars):
 		if self.run_func == None:
 			self.build()
 
@@ -675,7 +701,7 @@ class ClampPars(CudaFunction):
 
 		Nthreads = 32
 		blockSize = math.ceil(N / Nthreads)
-		self.run_func((blockSize,),(Nthreads,),(lower_bound, upper_bound, pars, N))
+		self.run_func((blockSize,),(Nthreads,),(lower_bound, upper_bound, step_type, pars, N))
 
 	def get_device_funcid(self):
 		return self.funcid
@@ -691,11 +717,11 @@ class ClampPars(CudaFunction):
 		temp = Template(
 """
 extern \"C\" __global__
-void {{funcid}}(const {{fp_type}}* lower_bound, const {{fp_type}}* upper_bound, {{fp_type}}* pars, int N) 
+void {{funcid}}(const {{fp_type}}* lower_bound, const {{fp_type}}* upper_bound, const char* step_type, {{fp_type}}* pars, int N) 
 {
 	int tid = blockDim.x * blockIdx.x + threadIdx.x;
 	if (tid < N) {
-		{{dfuncid}}(lower_bound, upper_bound, pars, tid, N);
+		{{dfuncid}}(lower_bound, upper_bound, step_type, pars, tid, N);
 	}
 }
 """)
@@ -734,35 +760,36 @@ def gradient_convergence_code(nparam: int, dtype: cp.dtype):
 	temp = Template(
 """
 __device__
-void {{funcid}}(const {{fp_type}}* pars, const {{fp_type}}* grad, const {{fp_type}}* lower_bound, const {{fp_type}}* upper_bound, char* step_type, float tol, int tid, int N) 
+void {{funcid}}(const {{fp_type}}* pars, const {{fp_type}}* g, const {{fp_type}}* f, const {{fp_type}}* lower_bound, const {{fp_type}}* upper_bound, char* step_type, float tol, int tid, int N) 
 {
+	if (step_type[tid] == 0) {
+		return;
+	}
+	
 	bool clamped = false;
 	{{fp_type}} clamped_norm = 0.0f;
-	{{fp_type}} norm = 0.0f;
 	{{fp_type}} temp1;
 	{{fp_type}} temp2;
-	int index;
 	for (int i = 0; i < {{nparam}}; ++i) {
-		index = i*N+tid;
-		temp1 = grad[index];
-		norm += temp1*temp1;
-		temp2 = pars[index];
-		temp1 = temp2 - temp1;
-		{{fp_type}} u = upper_bound[index];
-		{{fp_type}} l = lower_bound[index];
-		if (temp1 > u) {
+		int iidx = i*N+tid;
+		temp1 = pars[iidx];
+		temp2 = g[iidx];
+		temp2 = temp1 - temp2;
+		{{fp_type}} u = upper_bound[iidx];
+		{{fp_type}} l = lower_bound[iidx];
+		if (temp2 > u) {
 			clamped = true;
-			temp1 = u;
-		} else if (temp1 < l) {
+			temp2 = u;
+		} else if (temp2 < l) {
 			clamped = true;
-			temp1 = l;
+			temp2 = l;
 		}
-		temp1 = temp2 - temp1;
-		clamped_norm += temp1*temp1;
+		temp2 = temp1 - temp2;
+		clamped_norm += temp2*temp2;
 	}
 
-	if (clamped_norm < tol*(1 + norm)) {
-		if (step_type[tid] & 1 || clamped) {
+	if (clamped_norm < tol*(1 + f[tid])) {
+		if ((step_type[tid] & 1) || clamped) {
 			step_type[tid] = 0;
 		}
 	}
@@ -787,7 +814,7 @@ class GradientConvergence(CudaFunction):
 		self.mod = None
 		self.run_func = None
 
-	def run(self, pars, grad, lower_bound, upper_bound, step_type, tol):
+	def run(self, pars, g, f, lower_bound, upper_bound, step_type, tol):
 		if self.run_func == None:
 			self.build()
 
@@ -795,7 +822,7 @@ class GradientConvergence(CudaFunction):
 
 		Nthreads = 32
 		blockSize = math.ceil(N / Nthreads)
-		self.run_func((blockSize,),(Nthreads,),(pars, grad, lower_bound, upper_bound, step_type, cp.float64(tol).astype(self.dtype), N))
+		self.run_func((blockSize,),(Nthreads,),(pars, g, f, lower_bound, upper_bound, step_type, cp.float64(tol).astype(self.dtype), N))
 
 	def get_device_funcid(self):
 		return self.funcid
@@ -811,11 +838,11 @@ class GradientConvergence(CudaFunction):
 		temp = Template(
 """
 extern \"C\" __global__
-void {{funcid}}(const float* pars, const float* grad, const {{fp_type}}* lower_bound, const {{fp_type}}* upper_bound, char* step_type, float tol, int N) 
+void {{funcid}}(const float* pars, const float* g, const {{fp_type}}* f, const {{fp_type}}* lower_bound, const {{fp_type}}* upper_bound, char* step_type, float tol, int N) 
 {
 	int tid = blockDim.x * blockIdx.x + threadIdx.x;
 	if (tid < N) {
-		{{dfuncid}}(pars, grad, lower_bound, upper_bound, step_type, tol, tid, N);
+		{{dfuncid}}(pars, g, f, lower_bound, upper_bound, step_type, tol, tid, N);
 	}
 }
 """)
@@ -892,6 +919,9 @@ class SecondOrderLevenbergMarquardt(CudaFunction):
 		self.lower_bound_t = lower_bound_t
 		self.upper_bound_t = upper_bound_t
 
+		self.first_f = cp.empty((1, self.batch_size), dtype=self.dtype)
+		self.last_f = cp.empty((1, self.batch_size), dtype=self.dtype)
+
 		self.lam_t = 100*cp.ones((1, self.batch_size), dtype=self.dtype)
 		self.step_t = cp.empty((self.nparam, self.batch_size), dtype=self.dtype)
 		self.res_t = cp.empty((1, self.Nelem), dtype=self.dtype)
@@ -915,26 +945,32 @@ class SecondOrderLevenbergMarquardt(CudaFunction):
 			self.h_t.fill(0.0)
 			self.hl_t.fill(0.0)
 
-			print(self.pars_t[:,700000])
-
-			self.gradcu.run(self.pars_t, self.consts_t, self.data_t, self.lam_t,
+			cp.cuda.stream.get_current_stream().synchronize()
+			self.gradcu.run(self.pars_t, self.consts_t, self.data_t, self.lam_t, self.step_type_t,
 				self.res_t, self.jac_t, self.grad_t, self.hes_t, self.hesl_t)
-			self.gradsumcu.run(self.res_t, self.grad_t, self.hes_t, self.hesl_t, 
+			cp.cuda.stream.get_current_stream().synchronize()
+			self.gradsumcu.run(self.res_t, self.grad_t, self.hes_t, self.hesl_t, self.step_type_t,
 				self.f_t, self.g_t, self.h_t, self.hl_t)
-			self.gmw81solcu.run(self.hl_t, self.g_t, self.step_t)
-			
-			#self.step_t = cp.nan_to_num(self.step_t, copy=False, posinf=0.0, neginf=0.0)
+			cp.cuda.stream.get_current_stream().synchronize()
+			self.gmw81solcu.run(self.hl_t, self.g_t, self.step_type_t, self.step_t)
+			cp.cuda.stream.get_current_stream().synchronize()
+
+			if i == 0:
+				self.first_f = self.f_t.copy()
+			if i == iters-1:
+				self.last_f = self.f_t.copy()
+
+			self.step_t = cp.nan_to_num(self.step_t, copy=False, posinf=0.0, neginf=0.0)
 			cp.subtract(self.pars_t, self.step_t, out=self.pars_tp_t)
 
-			self.rescu.run(self.pars_tp_t, self.consts_t, self.data_t, self.res_t, self.ftp_t)
+			self.rescu.run(self.pars_tp_t, self.consts_t, self.data_t, self.step_type_t, self.res_t, self.ftp_t)
 			self.gaincu.run(self.f_t, self.ftp_t, self.pars_tp_t, self.step_t, 
 			   self.g_t, self.h_t, self.pars_t, self.lam_t, self.step_type_t)
 
-			self.clampcu.run(self.lower_bound_t, self.upper_bound_t, self.pars_t)
+			self.clampcu.run(self.lower_bound_t, self.upper_bound_t, self.step_type_t, self.pars_t)
 			
-			print(self.pars_t[:,700000])
-			#self.convcu.run(self.pars_t, self.g_t, self.lower_bound_t, 
-			#   self.upper_bound_t, self.step_type_t, cp.float32(tol))
+			self.convcu.run(self.pars_t, self.g_t, self.f_t, self.lower_bound_t, 
+			   self.upper_bound_t, self.step_type_t, cp.float32(tol))
 
 
 

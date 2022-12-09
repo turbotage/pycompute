@@ -1,10 +1,19 @@
 
 __device__
-void res_jac_grad_hes_hesl_4_1_21_f_f7def86f0a03(const float* params, const float* consts, const float* data, const float* lam,
+void res_jac_grad_hes_hesl_4_1_21_f_f7def86f0a03(const float* params, const float* consts, const float* data, const float* lam, const char* step_type,
 	float* res, float* jac, float* grad, float* hes, float* hesl, int tid, int N, int Nelem) 
 {
+
 	float pars[4];
 	int bucket = tid / 21;
+
+	if (tid == Nelem - 1) {
+		printf("bucket=%d\n", bucket);
+	}
+
+	if (step_type[bucket] == 0) {
+		return;
+	}
 
 	for (int i = 0; i < 4; ++i) {
 		pars[i] = params[i*N+bucket];
@@ -63,12 +72,12 @@ void res_jac_grad_hes_hesl_4_1_21_f_f7def86f0a03(const float* params, const floa
 }
 
 extern "C" __global__
-void k_res_jac_grad_hes_hesl_4_1_21_f_f7def86f0a03(const float* params, const float* consts, const float* data, const float* lam,
+void k_res_jac_grad_hes_hesl_4_1_21_f_f7def86f0a03(const float* params, const float* consts, const float* data, const float* lam, const char* step_type,
 	float* res, float* jac, float* grad, float* hes, float* hesl, int N, int Nelem) 
 {
 	int tid = blockDim.x * blockIdx.x + threadIdx.x;
 
 	if (tid < Nelem) {
-		res_jac_grad_hes_hesl_4_1_21_f_f7def86f0a03(params, consts, data, lam, res, jac, grad, hes, hesl, tid, N, Nelem);
+		res_jac_grad_hes_hesl_4_1_21_f_f7def86f0a03(params, consts, data, lam, step_type, res, jac, grad, hes, hesl, tid, N, Nelem);
 	}
 }
