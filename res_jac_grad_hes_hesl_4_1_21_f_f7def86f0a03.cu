@@ -7,10 +7,6 @@ void res_jac_grad_hes_hesl_4_1_21_f_f7def86f0a03(const float* params, const floa
 	float pars[4];
 	int bucket = tid / 21;
 
-	if (tid == Nelem - 1) {
-		printf("bucket=%d\n", bucket);
-	}
-
 	if (step_type[bucket] == 0) {
 		return;
 	}

@@ -189,10 +189,6 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp
 	{{fp_type}} pars[{{nparam}}];
 	int bucket = tid / {{ndata}};
 
-	if (tid == Nelem - 1) {
-		printf("bucket=%d\\n", bucket);
-	}
-
 	if (step_type[bucket] == 0) {
 		return;
 	}
@@ -558,10 +554,6 @@ void {{funcid}}(const {{fp_type}}* f, const {{fp_type}}* ftp, const {{fp_type}}*
 		step_type[tid] |= 8;
 	}
 
-	if (tid == 0) {
-		printf("rho=%f, actual=%f, pred=%f, step_type=%d\\n", rho, actual, predicted, step_type[tid]);
-	}
-
 }
 """)
 
@@ -890,19 +882,19 @@ class SecondOrderLevenbergMarquardt(CudaFunction):
 		self.consts_str = consts_str.copy()
 
 		self.gradcu = ResJacGradHesHesl(self.expr, self.pars_str.copy(), self.consts_str.copy(), self.ndata, self.dtype, self.write_to_file)
-		#self.gradcu.build()
+		self.gradcu.build()
 		self.gradsumcu = SumResGradHesHesl(self.nparam, self.ndata, self.dtype, self.write_to_file)
-		#self.gradsumcu.build()
+		self.gradsumcu.build()
 		self.gmw81solcu = solver.GMW81Solver(self.nparam, self.dtype, self.write_to_file)
-		#self.gmw81solcu.build()
+		self.gmw81solcu.build()
 		self.rescu = ResF(self.expr, self.pars_str.copy(), self.consts_str.copy(), self.ndata, self.dtype, self.write_to_file)
-		#self.rescu.build()
+		self.rescu.build()
 		self.gaincu = GainRatioStep(self.nparam, self.dtype, self.write_to_file)
-		#self.gaincu.build()
+		self.gaincu.build()
 		self.clampcu = ClampPars(self.nparam, self.dtype, self.write_to_file)
-		#self.clampcu.build()
+		self.clampcu.build()
 		self.convcu = GradientConvergence(self.nparam, self.dtype, self.write_to_file)
-		#self.convcu.build()
+		self.convcu.build()
 
 		self.batch_size = int(1)
 		self.Nelem = self.batch_size * self.ndata
@@ -919,10 +911,10 @@ class SecondOrderLevenbergMarquardt(CudaFunction):
 		self.lower_bound_t = lower_bound_t
 		self.upper_bound_t = upper_bound_t
 
-		self.first_f = cp.empty((1, self.batch_size), dtype=self.dtype)
-		self.last_f = cp.empty((1, self.batch_size), dtype=self.dtype)
+		self.first_f = (cp.finfo(cp.float32).max / 10.0)*cp.ones((1, self.batch_size), dtype=self.dtype)
+		self.last_f = (cp.finfo(cp.float32).max / 10.0)*cp.ones((1, self.batch_size), dtype=self.dtype)
 
-		self.lam_t = 100*cp.ones((1, self.batch_size), dtype=self.dtype)
+		self.lam_t = 10*cp.ones((1, self.batch_size), dtype=self.dtype)
 		self.step_t = cp.empty((self.nparam, self.batch_size), dtype=self.dtype)
 		self.res_t = cp.empty((1, self.Nelem), dtype=self.dtype)
 		self.jac_t = cp.empty((self.nparam, self.Nelem), dtype=self.dtype)
@@ -945,15 +937,11 @@ class SecondOrderLevenbergMarquardt(CudaFunction):
 			self.h_t.fill(0.0)
 			self.hl_t.fill(0.0)
 
-			cp.cuda.stream.get_current_stream().synchronize()
 			self.gradcu.run(self.pars_t, self.consts_t, self.data_t, self.lam_t, self.step_type_t,
 				self.res_t, self.jac_t, self.grad_t, self.hes_t, self.hesl_t)
-			cp.cuda.stream.get_current_stream().synchronize()
 			self.gradsumcu.run(self.res_t, self.grad_t, self.hes_t, self.hesl_t, self.step_type_t,
 				self.f_t, self.g_t, self.h_t, self.hl_t)
-			cp.cuda.stream.get_current_stream().synchronize()
 			self.gmw81solcu.run(self.hl_t, self.g_t, self.step_type_t, self.step_t)
-			cp.cuda.stream.get_current_stream().synchronize()
 
 			if i == 0:
 				self.first_f = self.f_t.copy()
@@ -961,7 +949,7 @@ class SecondOrderLevenbergMarquardt(CudaFunction):
 				self.last_f = self.f_t.copy()
 
 			self.step_t = cp.nan_to_num(self.step_t, copy=False, posinf=0.0, neginf=0.0)
-			cp.subtract(self.pars_t, self.step_t, out=self.pars_tp_t)
+			self.pars_tp_t = self.pars_t - self.step_t
 
 			self.rescu.run(self.pars_tp_t, self.consts_t, self.data_t, self.step_type_t, self.res_t, self.ftp_t)
 			self.gaincu.run(self.f_t, self.ftp_t, self.pars_tp_t, self.step_t, 
