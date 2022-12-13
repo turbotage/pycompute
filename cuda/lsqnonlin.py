@@ -214,7 +214,7 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp
 			if (i != j) {
 				hesl[kidx] = hes[kidx];
 			} else {
-				hesl[kidx] = hes[kidx] + lam[tid]*jtemp;
+				hesl[kidx] = hes[kidx] + lam[bucket]*jtemp;
 			}
 			++k;
 		}
@@ -930,6 +930,7 @@ class SecondOrderLevenbergMarquardt(CudaFunction):
 		self.pars_tp_t = cp.empty((self.nparam, self.batch_size), dtype=self.dtype)
 
 	def run(self, iters: int, tol: float):
+
 		for i in range(0,iters):
 			self.f_t.fill(0.0)
 			self.ftp_t.fill(0.0)
@@ -939,9 +940,12 @@ class SecondOrderLevenbergMarquardt(CudaFunction):
 
 			self.gradcu.run(self.pars_t, self.consts_t, self.data_t, self.lam_t, self.step_type_t,
 				self.res_t, self.jac_t, self.grad_t, self.hes_t, self.hesl_t)
+			cp.cuda.stream.get_current_stream().synchronize()
 			self.gradsumcu.run(self.res_t, self.grad_t, self.hes_t, self.hesl_t, self.step_type_t,
 				self.f_t, self.g_t, self.h_t, self.hl_t)
+			cp.cuda.stream.get_current_stream().synchronize()
 			self.gmw81solcu.run(self.hl_t, self.g_t, self.step_type_t, self.step_t)
+			cp.cuda.stream.get_current_stream().synchronize()
 
 			if i == 0:
 				self.first_f = self.f_t.copy()
@@ -949,7 +953,9 @@ class SecondOrderLevenbergMarquardt(CudaFunction):
 				self.last_f = self.f_t.copy()
 
 			self.step_t = cp.nan_to_num(self.step_t, copy=False, posinf=0.0, neginf=0.0)
-			self.pars_tp_t = self.pars_t - self.step_t
+			#self.pars_tp_t = self.pars_t - self.step_t
+			cp.subtract(self.pars_t, self.step_t, out=self.pars_tp_t)
+			#self.pars_t -= np.float32((i / iters))*self.step_t
 
 			self.rescu.run(self.pars_tp_t, self.consts_t, self.data_t, self.step_type_t, self.res_t, self.ftp_t)
 			self.gaincu.run(self.f_t, self.ftp_t, self.pars_tp_t, self.step_t, 
@@ -957,8 +963,10 @@ class SecondOrderLevenbergMarquardt(CudaFunction):
 
 			self.clampcu.run(self.lower_bound_t, self.upper_bound_t, self.step_type_t, self.pars_t)
 			
-			self.convcu.run(self.pars_t, self.g_t, self.f_t, self.lower_bound_t, 
-			   self.upper_bound_t, self.step_type_t, cp.float32(tol))
+			#self.convcu.run(self.pars_t, self.g_t, self.f_t, self.lower_bound_t, 
+			#   self.upper_bound_t, self.step_type_t, cp.float32(tol))
+
+		return self.pars_t
 
 
 

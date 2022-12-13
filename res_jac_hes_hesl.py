@@ -97,8 +97,6 @@ bvec = None
 Lmat = None
 Dmat = None
 
-
-
 start = time.time()
 for i in range(0,10):
 	fsum_t[:,:] = 0.0

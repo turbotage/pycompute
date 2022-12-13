@@ -24,8 +24,8 @@ def ivim_curve_plot_expr():
 
 def plot_curve_fit(expr, pars, consts, data, num_samples=500):
 	ilen = 0.01*(consts[-1] - consts[0])
-	istart = consts[0] - ilen
-	iend = consts[-1] + ilen
+	istart = consts[:,0] - ilen
+	iend = consts[:,-1] + ilen
 
 	domain = np.linspace(istart, iend, num=num_samples)
 	values = eval(expr, {'p': pars, 'x': domain, 'np': np})

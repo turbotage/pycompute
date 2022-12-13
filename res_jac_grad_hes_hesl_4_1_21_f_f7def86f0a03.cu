@@ -55,7 +55,7 @@ void res_jac_grad_hes_hesl_4_1_21_f_f7def86f0a03(const float* params, const floa
 			if (i != j) {
 				hesl[kidx] = hes[kidx];
 			} else {
-				hesl[kidx] = hes[kidx] + lam[tid]*jtemp;
+				hesl[kidx] = hes[kidx] + lam[bucket]*jtemp;
 			}
 			++k;
 		}
