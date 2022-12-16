@@ -172,6 +172,158 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp
 	def get_deps(self):
 		return list()
 
+def fghhl_code(expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
+	return 'fghhl' + ctc.dim_dim_dim_type_funcid(len(pars_str), len(consts_str), ndata,
+		dtype, 'fghhl') + '_' + util.expr_hash(expr, 12)
+
+def fghhl_code(expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
+	
+	rjh_temp = Template(
+"""
+__device__
+void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp_type}}* data, const {{fp_type}}* lam, const char* step_type,
+	{{fp_type}}* f, {{fp_type}}* g, {{fp_type}}* h, {{fp_type}}* hl, int tid, int N, int Nelem) 
+{
+	int bucket = tid / {{ndata}};
+	if (step_type[bucket] == 0) {
+		return;
+	}
+
+	{{fp_type}} pars[{{nparam}}];
+	{{fp_type}} res;
+
+	{{fp_type}} jac[{{nparam}}];
+	{{fp_type}} hes[{{nhes}}];
+	{{fp_type}} hesl[{{nhes}}];
+	{{fp_type}} lambda = lam[tid];
+
+
+	for (int i = 0; i < {{nparam}}; ++i) {
+		pars[i] = params[i*N+bucket];
+	}
+
+{{sub_expr}}
+
+{{eval_expr}}
+
+{{jac_expr}}
+
+{{hes_expr}}
+		
+	int k = 0;
+	for (int i = 0; i < {{nparam}}; ++i) {
+		for (int j = 0; j <= i; ++j) {
+			{{fp_type}} jtemp = jac[i] * jac[j];
+			hes[k] += jtemp;
+			if (i != j) {
+				hesl[k] = hes[k];
+			} else {
+				hesl[k] = hes[k] + lambda*jtemp;
+			}
+			++k;
+		}
+	}
+
+	for (int i = 0; i < {{nparam}}; ++i) {
+		int iidx = i*Nelem+tid;
+		grad[i] = jac[i] * res;
+	}
+
+	res *= res;
+
+	// Start summing up parts
+	atomicAdd(&f[bucket], res);
+
+	for (int i = 0; i < {{nparam}}; ++i) {
+		atomicAdd(&g[i*N+bucket], grad[i]);
+	}
+
+	for (int i = 0; i < {{nhes}}; ++i) {
+		int iidx = i*N+bucket;
+		atomicAdd(&h[iidx], hes[i]);
+		atomicAdd(&hl[iidx], hesl[i]);
+	}
+
+}
+""")
+
+	type = ctc.check_fp32_or_fp64(CudaTensor(None, dtype), 'fghhl')
+
+	nparam = len(pars_str)
+	nconst = len(consts_str)
+	nhes = round(nparam*(nparam+1)/2)
+
+	funcid = res_jac_grad_hes_hesl_funcid(expr, pars_str, consts_str, ndata, dtype)
+
+	sym_expr = sympify(expr)
+	# convert parameter names to ease kernel generation
+	for k in range(0,len(pars_str)):
+		temp = pars_str[k]
+		pars_str[k] = 'parvar_' + temp
+		sym_expr = sym_expr.subs(temp, pars_str[k])
+
+	for k in range(0,len(consts_str)):
+		temp = consts_str[k]
+		consts_str[k] = 'convar_' + temp
+		sym_expr = sym_expr.subs(temp, consts_str[k])
+
+	substs, reduced = util.res_jac_hes(str(sym_expr), pars_str, consts_str)
+	cuprint = util.CUDAPrinter()
+
+	sub_str = ""
+	for s in substs:
+		sub_str += '\t'+type+' '+cuprint.tcs_f(s[0])+' = '+cuprint.tcs_f(s[1])+';\n'
+
+	eval_str = '\tres = '+cuprint.tcs_f(reduced[0])+'-data[tid];'
+
+	jac_str = ""
+	for k in range(nparam):
+		s = reduced[1+k]
+		ctstr = ""
+		if dtype == cp.float32:
+			ctstr = cuprint.tcs_f(s)
+		else:
+			ctstr = cuprint.tcs_d(s)
+		if ctstr == '0':
+			ctstr = '0.0f'
+		jac_str += '\tjac['+str(k)+'] = '+ctstr+';\n'
+
+	hes_str = ""
+	for k in range(nhes)):
+		s = reduced[(nparam + 1) + k]
+		ctstr = ""
+		if dtype == cp.float32:
+			ctstr = cuprint.tcs_f(s)
+		else:
+			ctstr = cuprint.tcs_d(s)
+		if ctstr == '0':
+			ctstr = '0.0f'
+		hes_str += '\thes['+str(k)+'] = '+ctstr+'*res;\n'
+
+	for k in range(nparam):
+		p = pars_str[k]
+		repl = 'pars['+str(k)+']'
+		sub_str = sub_str.replace(p, repl)
+		eval_str = eval_str.replace(p, repl)
+		jac_str = jac_str.replace(p, repl)
+		hes_str = hes_str.replace(p, repl)
+
+	for k in range(len(consts_str)):
+		c = consts_str[k]
+		repl = 'consts['+str(k)+'*Nelem+tid]'
+		sub_str = sub_str.replace(c, repl)
+		eval_str = eval_str.replace(c, repl)
+		jac_str = jac_str.replace(c, repl)
+		hes_str = hes_str.replace(c, repl)
+
+	rjh_kernel = rjh_temp.render(funcid=funcid, fp_type=type,
+		nparam=nparam, nconst=nconst, ndata=ndata, nhes=nhes,
+		sub_expr=sub_str, eval_expr=eval_str, jac_expr=jac_str, hes_expr=hes_str)
+
+
+	return rjh_kernel
+
+
 
 def res_jac_grad_hes_hesl_funcid(expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
 	return 'res_jac_grad_hes_hesl' + ctc.dim_dim_dim_type_funcid(len(pars_str), len(consts_str), ndata, 
@@ -558,7 +710,7 @@ void {{funcid}}(const {{fp_type}}* f, const {{fp_type}}* ftp, const {{fp_type}}*
 	}
 
 	if (tid == 100) {
-		printf("actual=%f, rho=%f, predicted=%f, step_type=%d\\n", actual, rho, predicted, step_type[tid]);
+		printf("actual=%f, rho=%f, predicted=%f, step_type=%d, f=%f\\n", actual, rho, predicted, step_type[tid], f[tid]);
 	}
 
 }
@@ -959,6 +1111,7 @@ class SecondOrderLevenbergMarquardt(CudaFunction):
 			self.step_t = cp.nan_to_num(self.step_t, copy=False, posinf=0.0, neginf=0.0)
 			#self.pars_tp_t = self.pars_t - self.step_t
 			cp.subtract(self.pars_t, self.step_t, out=self.pars_tp_t)
+			#cp.add(self.pars_t, self.step_t, out=self.pars_tp_t)
 			#self.pars_t -= np.float32(((i+1) / iters))*self.step_t
 
 			self.rescu.run(self.pars_tp_t, self.consts_t, self.data_t, self.step_type_t, self.res_t, self.ftp_t)

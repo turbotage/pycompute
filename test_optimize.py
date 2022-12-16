@@ -7,7 +7,7 @@ import cuda.cuda_program as cuda_cp
 import math
 import time
 
-batch_size = 2000000
+batch_size = 20000
 ndata = 21
 Nelem = batch_size * ndata
 
@@ -30,21 +30,20 @@ chunk_size = math.ceil(batch_size / nchunks)
 solm = clsq.SecondOrderLevenbergMarquardt(expr, pars_str, consts_str, ndata=21, dtype=cp.float32, write_to_file=True)
 
 start = time.time()
-for i in range(0,nchunks):
-	
-	parscu = cp.array(pars[:,i*chunk_size:(i+1)*chunk_size], dtype=cp.float32, copy=True, order='C')
-	constscu = cp.array(consts[:,i*chunk_size*ndata:(i+1)*chunk_size*ndata], dtype=cp.float32, copy=True, order='C')
-	datacu = cp.array(data[:,i*chunk_size*ndata:(i+1)*chunk_size*ndata], dtype=cp.float32, copy=True, order='C')
-	lower_bound_cu = cp.array(lower_bound[:,i*chunk_size:(i+1)*chunk_size], dtype=cp.float32, copy=True, order='C')
-	upper_bound_cu = cp.array(upper_bound[:,i*chunk_size:(i+1)*chunk_size], dtype=cp.float32, copy=True, order='C')
 
-	solm.setup(parscu, constscu, datacu, lower_bound_cu, upper_bound_cu)
-	solm.run(20, 1e-30)
+parscu = cp.array(pars, dtype=cp.float32, copy=True, order='C')
+constscu = cp.array(consts, dtype=cp.float32, copy=True, order='C')
+datacu = cp.array(data, dtype=cp.float32, copy=True, order='C')
+lower_bound_cu = cp.array(lower_bound, dtype=cp.float32, copy=True, order='C')
+upper_bound_cu = cp.array(upper_bound, dtype=cp.float32, copy=True, order='C')
 
-	first_f[:,i*chunk_size:(i+1)*chunk_size] = solm.first_f.get()
-	last_f[:,i*chunk_size:(i+1)*chunk_size] = solm.last_f.get()
+solm.setup(parscu, constscu, datacu, lower_bound_cu, upper_bound_cu)
+solm.run(20, 1e-30)
 
-	pars[:,i*chunk_size:(i+1)*chunk_size] = parscu.get()
+first_f = solm.first_f.get()
+last_f = solm.last_f.get()
+
+pars = parscu.get()
 
 cp.cuda.stream.get_current_stream().synchronize()
 end = time.time()
