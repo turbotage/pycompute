@@ -39,7 +39,7 @@ for i in range(0,nchunks):
 	upper_bound_cu = cp.array(upper_bound[:,i*chunk_size:(i+1)*chunk_size], dtype=cp.float32, copy=True, order='C')
 
 	solm.setup(parscu, constscu, datacu, lower_bound_cu, upper_bound_cu)
-	solm.run(100, 1e-30)
+	solm.run(20, 1e-30)
 
 	first_f[:,i*chunk_size:(i+1)*chunk_size] = solm.first_f.get()
 	last_f[:,i*chunk_size:(i+1)*chunk_size] = solm.last_f.get()

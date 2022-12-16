@@ -528,13 +528,16 @@ void {{funcid}}(const {{fp_type}}* f, const {{fp_type}}* ftp, const {{fp_type}}*
 
 	for (int i = 0; i < {{nparam}}; ++i) {
 		int iidx = i*N+tid;
-		predicted += step[iidx] * g[iidx];
+		predicted -= step[iidx] * g[iidx];
 	}
 
 	{{fp_type}} rho = actual / predicted;
 
-	if (rho > mu && actual > 0) {
+	if ((rho > mu) && (actual > 0)) {
 		for (int i = 0; i < {{nparam}}; ++i) {
+			if (tid == 100) {
+				printf("cp ");
+			}
 			int iidx = i*N+tid;
 			pars[iidx] = pars_tp[iidx];
 		}
@@ -552,6 +555,10 @@ void {{funcid}}(const {{fp_type}}* f, const {{fp_type}}* ftp, const {{fp_type}}*
 	if (predicted < 0) {
 		lam[tid] *= dec;
 		step_type[tid] |= 8;
+	}
+
+	if (tid == 100) {
+		printf("actual=%f, rho=%f, predicted=%f, step_type=%d\\n", actual, rho, predicted, step_type[tid]);
 	}
 
 }
@@ -914,7 +921,7 @@ class SecondOrderLevenbergMarquardt(CudaFunction):
 		self.first_f = (cp.finfo(cp.float32).max / 10.0)*cp.ones((1, self.batch_size), dtype=self.dtype)
 		self.last_f = (cp.finfo(cp.float32).max / 10.0)*cp.ones((1, self.batch_size), dtype=self.dtype)
 
-		self.lam_t = 10*cp.ones((1, self.batch_size), dtype=self.dtype)
+		self.lam_t = 1*cp.ones((1, self.batch_size), dtype=self.dtype)
 		self.step_t = cp.empty((self.nparam, self.batch_size), dtype=self.dtype)
 		self.res_t = cp.empty((1, self.Nelem), dtype=self.dtype)
 		self.jac_t = cp.empty((self.nparam, self.Nelem), dtype=self.dtype)
@@ -940,12 +947,9 @@ class SecondOrderLevenbergMarquardt(CudaFunction):
 
 			self.gradcu.run(self.pars_t, self.consts_t, self.data_t, self.lam_t, self.step_type_t,
 				self.res_t, self.jac_t, self.grad_t, self.hes_t, self.hesl_t)
-			cp.cuda.stream.get_current_stream().synchronize()
 			self.gradsumcu.run(self.res_t, self.grad_t, self.hes_t, self.hesl_t, self.step_type_t,
 				self.f_t, self.g_t, self.h_t, self.hl_t)
-			cp.cuda.stream.get_current_stream().synchronize()
 			self.gmw81solcu.run(self.hl_t, self.g_t, self.step_type_t, self.step_t)
-			cp.cuda.stream.get_current_stream().synchronize()
 
 			if i == 0:
 				self.first_f = self.f_t.copy()
@@ -955,18 +959,16 @@ class SecondOrderLevenbergMarquardt(CudaFunction):
 			self.step_t = cp.nan_to_num(self.step_t, copy=False, posinf=0.0, neginf=0.0)
 			#self.pars_tp_t = self.pars_t - self.step_t
 			cp.subtract(self.pars_t, self.step_t, out=self.pars_tp_t)
-			#self.pars_t -= np.float32((i / iters))*self.step_t
+			#self.pars_t -= np.float32(((i+1) / iters))*self.step_t
 
 			self.rescu.run(self.pars_tp_t, self.consts_t, self.data_t, self.step_type_t, self.res_t, self.ftp_t)
 			self.gaincu.run(self.f_t, self.ftp_t, self.pars_tp_t, self.step_t, 
 			   self.g_t, self.h_t, self.pars_t, self.lam_t, self.step_type_t)
 
-			self.clampcu.run(self.lower_bound_t, self.upper_bound_t, self.step_type_t, self.pars_t)
+			#self.clampcu.run(self.lower_bound_t, self.upper_bound_t, self.step_type_t, self.pars_t)
 			
 			#self.convcu.run(self.pars_t, self.g_t, self.f_t, self.lower_bound_t, 
 			#   self.upper_bound_t, self.step_type_t, cp.float32(tol))
-
-		return self.pars_t
 
 
 
