@@ -1,9 +1,32 @@
 from matplotlib import pyplot as plt
+from matplotlib import animation
 from mpl_toolkits.mplot3d import Axes3D
+
+import time
 
 import numpy as np
 
-def param_printer(pars, slicez=15, clim=[0.0, 16000], viewport=[[0.0, 1.0], [0.0, 1.0]], pars_idx: list[int] = [0]):
+def animate_matrix(mat, fps=24):
+	fig = plt.figure()
+	ax = fig.add_axes([0,0,1,1])
+	figdata = ax.imshow(mat[:,:,0])
+
+	def animate(i):
+		ax.clear()
+		ax.imshow(mat[:,:,i])
+
+	ani = animation.FuncAnimation(fig, func=animate, frames=mat.shape[2], interval=(1/fps))
+	plt.show()
+	return ani
+
+
+def plot_matrix(mat):
+	fig = plt.figure()
+	ax = fig.add_axes([0,0,1,1])
+	figdata = ax.imshow(mat)
+	fig.colorbar(figdata, ax=ax)
+
+def param_plotter(pars, slicez=15, clim=[0.0, 16000], viewport=[[0.0, 1.0], [0.0, 1.0]], pars_idx: list[int] = [0]):
 	xlen = pars.shape[0]
 	ylen = pars.shape[1]
 	if viewport is None:
