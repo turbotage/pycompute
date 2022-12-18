@@ -9,17 +9,25 @@ import time
 
 batch_size = 20000
 ndata = 21
-Nelem = batch_size * ndata
 
 expr = 'S0*(f*exp(-b*D_1)+(1-f)*exp(-b*D_2))'
 pars_str = ['S0', 'f', 'D_1', 'D_2']
 consts_str = ['b']
 
-data = np.random.rand(1, Nelem).astype(dtype=cp.float32, copy=True, order='C')
-consts = 0.01*np.random.rand(1, Nelem).astype(dtype=cp.float32, copy=True, order='C')
+data = np.random.rand(ndata, batch_size).astype(dtype=cp.float32, copy=True, order='C')
+consts = 0.01*np.random.rand(1, ndata, batch_size).astype(dtype=cp.float32, copy=True, order='C')
 pars = np.random.rand(4, batch_size).astype(dtype=cp.float32, copy=True, order='C')
 lower_bound = (np.finfo(np.float32).min / 10.0)*np.ones((4, batch_size), dtype=np.float32)
 upper_bound = (np.finfo(np.float32).max / 10.0)*np.ones((4, batch_size), dtype=np.float32)
+
+data[:,0] = np.array([908.02686, 905.39154, 906.08997, 700.7829, 753.0848, 859.9136,
+  	   870.48846, 755.96893, 617.3499, 566.2044 , 746.62067, 662.47424,
+  	   628.8806, 459.7746 , 643.30554, 318.58453, 416.5493, 348.34335,
+  	   411.74026, 284.17468, 290.30487], dtype=np.float32)
+
+with open('bvals_ivim.npy', 'rb') as f:
+    consts[:,:,0] = np.load(f).astype(cp.float32).reshape((1,ndata))
+
 
 first_f = np.empty((1,batch_size), dtype=np.float32)
 last_f = np.empty((1, batch_size), dtype=np.float32)
