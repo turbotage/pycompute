@@ -15,6 +15,8 @@ from . import cuda_program as cudap
 from .cuda_program import CudaFunction, CudaTensor
 from .cuda_program import CudaTensorChecking as ctc
 
+import time
+
 def f_funcid(expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
 	return 'f' + ctc.dim_dim_dim_type_funcid(len(pars_str), len(consts_str), ndata,
 		dtype, 'f') + '_' + util.expr_hash(expr, 12)
@@ -23,23 +25,22 @@ def f_code(expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dt
 	rjh_temp = Template(
 """
 __device__
-void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp_type}}* data, const char* step_type,
+void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp_type}}* data,
 	{{fp_type}}* f, int tid, int Nprobs) 
 {
-	if (step_type[tid] == 0) {
-		return;
-	}
-
 	{{fp_type}} pars[{{nparam}}];
-
 	for (int i = 0; i < {{ndata}}; ++i) {
 		pars[i] = params[i*Nprobs+tid];
 	}
+
+	{{fp_type}} res;
 
 	for (int i = 0; i < {{ndata}}; ++i) {
 {{sub_expr}}
 
 {{res_expr}}
+
+		f[tid] += res * res;
 	}
 }
 """)
@@ -70,7 +71,7 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp
 	for s in substs:
 		sub_str += '\t'+type+' '+cuprint.tcs_f(s[0])+' = '+cuprint.tcs_f(s[1])+';\n'
 
-	res_str = '\t\tf[tid] += '+cuprint.tcs_f(reduced[0])+'-data[i*Nprobs+tid];'
+	res_str = '\t\tres = '+cuprint.tcs_f(reduced[0])+'-data[i*Nprobs+tid];'
 
 	for k in range(nparam):
 		p = pars_str[k]
@@ -136,7 +137,11 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp
 {
 	int tid = blockDim.x * blockIdx.x + threadIdx.x;
 	if (tid < Nprobs) {
-		{{dfuncid}}(params, consts, data, step_type, f, tid, Nprobs);
+		if (step_type[tid] == 0) {
+			return;
+		}
+
+		{{dfuncid}}(params, consts, data, f, tid, Nprobs);
 	}
 }
 """)
@@ -177,13 +182,9 @@ def fghhl_code(expr: str, pars_str: list[str], consts_str: list[str], ndata: int
 	rjh_temp = Template(
 """
 __device__
-void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp_type}}* data, const {{fp_type}}* lam, const char* step_type,
+void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp_type}}* data, const {{fp_type}}* lam,
 	{{fp_type}}* f, {{fp_type}}* g, {{fp_type}}* h, {{fp_type}}* hl, int tid, int Nprobs) 
 {
-	if (step_type[tid] == 0) {
-		return;
-	}
-
 	{{fp_type}} pars[{{nparam}}];
 	for (int i = 0; i < {{nparam}}; ++i) {
 		pars[i] = params[i*Nprobs+tid];
@@ -204,10 +205,6 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp
 {{jac_expr}}
 
 {{hes_expr}}
-
-		if (tid == 0) {
-			printf("res[%d]=%f\\n", i, res);
-		}
 
 		// sum these parts
 		f[tid] += res * res;
@@ -365,7 +362,11 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp
 	int tid = blockDim.x * blockIdx.x + threadIdx.x;
 
 	if (tid < Nprobs) {
-		{{dfuncid}}(params, consts, data, lam, step_type, f, g, h, hl, tid, Nprobs);
+		if (step_type[tid] == 0) {
+			return;
+		}
+
+		{{dfuncid}}(params, consts, data, lam, f, g, h, hl, tid, Nprobs);
 	}
 }
 """)
@@ -408,9 +409,6 @@ void {{funcid}}(const {{fp_type}}* f, const {{fp_type}}* ftp, const {{fp_type}}*
 	const {{fp_type}}* g, const {{fp_type}}* h, {{fp_type}}* pars, 
 	{{fp_type}}* lam, char* step_type, {{fp_type}} mu, {{fp_type}} eta, {{fp_type}} acc, {{fp_type}} dec, int tid, int N) 
 {
-	if (step_type[tid] == 0) {
-		return;
-	}
 
 	{{fp_type}} actual = 0.5f * (f[tid] - ftp[tid]);
 	{{fp_type}} predicted = 0.0f;
@@ -512,11 +510,15 @@ class GainRatioStep(CudaFunction):
 extern \"C\" __global__
 void {{funcid}}(const {{fp_type}}* f, const {{fp_type}}* ftp, const {{fp_type}}* pars_tp, const {{fp_type}}* step,
 	const {{fp_type}}* g, const {{fp_type}}* h, {{fp_type}}* pars, 
-	{{fp_type}}* lam, char* step_type, {{fp_type}} mu, {{fp_type}} eta, {{fp_type}} acc, {{fp_type}} dec, int N) 
+	{{fp_type}}* lam, char* step_type, {{fp_type}} mu, {{fp_type}} eta, {{fp_type}} acc, {{fp_type}} dec, int Nprobs) 
 {
 	int tid = blockDim.x * blockIdx.x + threadIdx.x;
-	if (tid < N) {
-		{{dfuncid}}(f, ftp, pars_tp, step, g, h, pars, lam, step_type, mu, eta, acc, dec, tid, N);
+	if (tid < Nprobs) {
+		if (step_type[tid] == 0) {
+			return;
+		}
+
+		{{dfuncid}}(f, ftp, pars_tp, step, g, h, pars, lam, step_type, mu, eta, acc, dec, tid, Nprobs);
 	}
 }
 """)
@@ -555,12 +557,8 @@ def clamp_pars_code(nparam: int, dtype: cp.dtype):
 	temp = Template(
 """
 __device__
-void {{funcid}}(const {{fp_type}}* lower_bound, const {{fp_type}}* upper_bound, const char* step_type, {{fp_type}}* pars, int tid, int N) 
+void {{funcid}}(const {{fp_type}}* lower_bound, const {{fp_type}}* upper_bound, {{fp_type}}* pars, int tid, int N) 
 {
-	if (step_type[tid] == 0) {
-		return;
-	}
-
 	for (int i = 0; i < {{nparam}}; ++i) {
 		int index = i*N+tid;
 		{{fp_type}} p = pars[index];
@@ -619,11 +617,15 @@ class ClampPars(CudaFunction):
 		temp = Template(
 """
 extern \"C\" __global__
-void {{funcid}}(const {{fp_type}}* lower_bound, const {{fp_type}}* upper_bound, const char* step_type, {{fp_type}}* pars, int N) 
+void {{funcid}}(const {{fp_type}}* lower_bound, const {{fp_type}}* upper_bound, const char* step_type, {{fp_type}}* pars, int Nprobs) 
 {
 	int tid = blockDim.x * blockIdx.x + threadIdx.x;
-	if (tid < N) {
-		{{dfuncid}}(lower_bound, upper_bound, step_type, pars, tid, N);
+	if (tid < Nprobs) {
+		if (step_type[tid] == 0) {
+			return;
+		}
+
+		{{dfuncid}}(lower_bound, upper_bound, pars, tid, Nprobs);
 	}
 }
 """)
@@ -664,10 +666,6 @@ def gradient_convergence_code(nparam: int, dtype: cp.dtype):
 __device__
 void {{funcid}}(const {{fp_type}}* pars, const {{fp_type}}* g, const {{fp_type}}* f, const {{fp_type}}* lower_bound, const {{fp_type}}* upper_bound, char* step_type, float tol, int tid, int N) 
 {
-	if (step_type[tid] == 0) {
-		return;
-	}
-	
 	bool clamped = false;
 	{{fp_type}} clamped_norm = 0.0f;
 	{{fp_type}} temp1;
@@ -740,11 +738,15 @@ class GradientConvergence(CudaFunction):
 		temp = Template(
 """
 extern \"C\" __global__
-void {{funcid}}(const float* pars, const float* g, const {{fp_type}}* f, const {{fp_type}}* lower_bound, const {{fp_type}}* upper_bound, char* step_type, float tol, int N) 
+void {{funcid}}(const float* pars, const float* g, const {{fp_type}}* f, const {{fp_type}}* lower_bound, const {{fp_type}}* upper_bound, char* step_type, float tol, int Nprobs) 
 {
 	int tid = blockDim.x * blockIdx.x + threadIdx.x;
-	if (tid < N) {
-		{{dfuncid}}(pars, g, f, lower_bound, upper_bound, step_type, tol, tid, N);
+	if (tid < Nprobs) {
+		if (step_type[tid] == 0) {
+			return;
+		}
+	
+		{{dfuncid}}(pars, g, f, lower_bound, upper_bound, step_type, tol, tid, Nprobs);
 	}
 }
 """)
@@ -777,7 +779,7 @@ void {{funcid}}(const float* pars, const float* g, const {{fp_type}}* f, const {
 		return list()
 
 
-class SecondOrderLevenbergMarquardt(CudaFunction):
+class SecondOrderLevenbergMarquardtOld(CudaFunction):
 	def __init__(self, expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype, write_to_file: bool = False):
 		self.nparam = len(pars_str)
 		self.nhes = round(self.nparam * (self.nparam + 1) / 2)
@@ -847,6 +849,10 @@ class SecondOrderLevenbergMarquardt(CudaFunction):
 				self.last_f = self.f_t.copy()
 
 			self.step_t = cp.nan_to_num(self.step_t, copy=False, posinf=0.0, neginf=0.0)
+
+			self.convcu.run(self.pars_t, self.g_t, self.f_t, self.lower_bound_t, 
+			   self.upper_bound_t, self.step_type_t, cp.float32(tol))
+
 			cp.subtract(self.pars_t, self.step_t, out=self.pars_tp_t)
 
 			self.fcu.run(self.pars_tp_t, self.consts_t, self.data_t, self.step_type_t, self.ftp_t)
@@ -855,10 +861,304 @@ class SecondOrderLevenbergMarquardt(CudaFunction):
 			   self.g_t, self.h_t, self.pars_t, self.lam_t, self.step_type_t)
 
 			self.clampcu.run(self.lower_bound_t, self.upper_bound_t, self.step_type_t, self.pars_t)
+
+
+def second_order_levenberg_marquardt_funcid(expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
+	return 'second_order_levenberg_marquardt' + ctc.dim_dim_dim_type_funcid(len(pars_str), len(consts_str), ndata,
+		dtype, 'second_order_levenberg_marquardt') + '_' + util.expr_hash(expr, 12)
+
+def second_order_levenberg_marquardt_code(expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
+	codestr = Template(
+"""
+__device__
+void {{funcid}}(const {{fp_type}}* consts, const {{fp_type}}* data, const {{fp_type}}* lower_bound, const {{fp_type}}* upper_bound, 
+	{{fp_type}} tol, {{fp_type}} mu, {{fp_type}} eta, {{fp_type}} acc, {{fp_type}} dec,
+	{{fp_type}}* params, {{fp_type}}* params_tp, {{fp_type}}* step, {{fp_type}}* lam, char* step_type,
+	{{fp_type}}* f, {{fp_type}}* ftp, {{fp_type}}* g, {{fp_type}}* h, {{fp_type}}* hl, int tid, int Nprobs)
+{
+	// Set gradients and objective functions to zero
+	{
+		f[tid] = 0.0f;
+		ftp[tid] = 0.0f;
+		for (int i = 0; i < {{nparam}}; ++i) {
+			g[i*Nprobs+tid] = 0.0f;
+		}
+		for (int i = 0; i < {{nhes}}; ++i) {
+			h[i*Nprobs+tid] = 0.0f;
+			hl[i*Nprobs+tid] = 0.0f;
+		}
+	}
+
+	// Calculate gradients
+	{
+		{{grad_funcid}}(params, consts, data, lam, f, g, h, hl, tid, Nprobs);
+	}
+
+	// Solve step
+	{
+		{{fp_type}}* mat = hl;
+		{{fp_type}}* rhs = g;
+		{{fp_type}}* sol = step;
+
+		{{fp_type}} mat_copy[{{nparam}}*{{nparam}}];
+		{{fp_type}} rhs_copy[{{nparam}}];
+		{{fp_type}} sol_copy[{{nparam}}];
+
+		for (int i = 0; i < {{nparam}}; ++i) {
+			rhs_copy[i] = rhs[i*Nprobs+tid];
+			sol_copy[i] = sol[i*Nprobs+tid];
+		}
+		int k = 0;
+		for (int i = 0; i < {{nparam}}; ++i) {
+			for (int j = 0; j <= i; ++j) {
+				{{fp_type}} temp = mat[k*Nprobs+tid];
+				mat_copy[i*{{nparam}}+j] = temp;
+				if (i != j) {
+					mat_copy[j*{{nparam}}+i] = temp;
+				}
+				++k;
+			}
+		}
+
+		{{gmw81_funcid}}(mat_copy, rhs_copy, sol_copy);
+
+		for (int i = 0; i < {{nparam}}; ++i) {
+			sol[i*Nprobs+tid] = sol_copy[i];
+		}
+	}
+
+	// Remove NaN and Infs
+	{
+		for (int i = 0; i < {{nparam}}; ++i) {
+			int idx = i*Nprobs+tid;
+
+			// Remove inf
+			{{fp_type}} si = step[idx];
+			if (isnan(si) || isinf(si)) {
+				step[idx] = 0.0f;
+			}
+		}
+	}
+
+	// Check convergence
+	{
+		{{converg_funcid}}(params, g, f, lower_bound, upper_bound, step_type, tol, tid, Nprobs);
+		if (step_type[tid] == 0) {
+			return;
+		}
+	}
+
+	// Subtract step from params
+	{
+		for (int i = 0; i < {{nparam}}; ++i) {
+			int idx = i*Nprobs+tid;
+			params_tp[idx] = params[idx] - step[idx];
+		}
+	}
+
+	// Calculate error at new params
+	{
+		{{fobj_funcid}}(params_tp, consts, data, params, tid, Nprobs);
+	}
+
+	// Calculate gain ratio and determine step type
+	{
+		{{gain_funcid}}(f, ftp, params_tp, step, g, h, params, lam, step_type, mu, eta, acc, dec, tid, Nprobs);
+	}
+
+	// Clamp parameters to feasible region
+	{
+		{{clamp_funcid}}(lower_bound, upper_bound, params, tid, Nprobs);
+	}
+
+}
+""")
+
+	nparam = len(pars_str)
+	nconst = len(consts_str)
+	nhes = round(nparam*(nparam+1)/2)
+
+	funcid = second_order_levenberg_marquardt_funcid(expr, pars_str, consts_str, ndata, dtype)
+
+	type = ctc.check_fp32_or_fp64(CudaTensor(None, dtype), 'second_order_levenberg_marquardt')
+
+	grad_funcid = fghhl_funcid(expr, pars_str, consts_str, ndata, dtype)
+	gmw81_funcid = solver.gmw81_solver_funcid(nparam, dtype)
+	fobj_funcid = f_funcid(expr, pars_str, consts_str, ndata, dtype)
+	gain_funcid = gain_ratio_step_funcid(nparam, dtype)
+	clamp_funcid = clamp_pars_funcid(nparam, dtype)
+	converg_funcid = gradient_convergence_funcid(nparam, dtype)
+
+	return codestr.render(funcid=funcid, nparam=nparam, nconst=nconst, nhes=nhes, grad_funcid=grad_funcid, fp_type=type,
+		gmw81_funcid=gmw81_funcid, fobj_funcid=fobj_funcid, gain_funcid=gain_funcid, clamp_funcid=clamp_funcid, converg_funcid=converg_funcid)
+
+class SecondOrderLevenbergMarquardt(CudaFunction):
+	def __init__(self, expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype, write_to_file: bool = False):
+		self.nparam = len(pars_str)
+		self.nhes = round(self.nparam * (self.nparam + 1) / 2)
+		self.nconst = len(consts_str)
+		self.ndata = ndata
+		self.dtype = dtype
+		self.type_str = ctc.type_to_typestr(dtype)
+
+		self.write_to_file = write_to_file
+
+		self.expr = expr
+		self.pars_str = pars_str.copy()
+		self.consts_str = consts_str.copy()
+
+		self.funcid = second_order_levenberg_marquardt_funcid(expr, pars_str.copy(), consts_str.copy(), ndata, dtype)
+		self.code = second_order_levenberg_marquardt_code(expr, pars_str.copy(), consts_str.copy(), ndata, dtype)
+
+		self.build()
+
+		self.Nprobs = int(1)
+
+	def get_device_funcid(self):
+		return self.funcid
+
+	def get_kernel_funcid(self):
+		funcid = self.funcid
+		return 'k_' + funcid
+
+	def get_device_code(self):
+		return self.code
+
+	def get_kernel_code(self):
+		temp = Template(
+"""
+extern \"C\" __global__
+void {{funcid}}(const {{fp_type}}* consts, const {{fp_type}}* data, const {{fp_type}}* lower_bound, const {{fp_type}}* upper_bound,
+	{{fp_type}} tol, {{fp_type}} mu, {{fp_type}} eta, {{fp_type}} acc, {{fp_type}} dec,
+	{{fp_type}}* params, {{fp_type}}* params_tp, {{fp_type}}* step, {{fp_type}}* lam, char* step_type,
+	{{fp_type}}* f, {{fp_type}}* ftp, {{fp_type}}* g, {{fp_type}}* h, {{fp_type}}* hl, int Nprobs) 
+{
+	int tid = blockDim.x * blockIdx.x + threadIdx.x;
+
+	if (tid < Nprobs) {
+
+		if (step_type[tid] == 0) {
+			return;
+		}
+
+		{{dfuncid}}(consts, data, lower_bound, upper_bound, tol, mu, eta, acc, dec, params, params_tp, step, lam, step_type, f, ftp, g, h, hl, tid, Nprobs);		
+	}
+}
+""")
+		fid = self.get_kernel_funcid()
+		dfid = self.get_device_funcid()
+
+		return temp.render(funcid=fid, dfuncid=dfid, fp_type=self.type_str)
+
+	def build(self):
+		cc = cudap.code_gen_walking(self, "")
+		if self.write_to_file:
+			with open(self.get_device_funcid()+'.cu', "w") as f:
+				f.write(cc)
+		try:
+			self.mod = cp.RawModule(code=cc)
+			self.run_func = self.mod.get_function(self.get_kernel_funcid())
+		except:
+			with open("on_compile_fail.cu", "w") as f:
+				f.write(cc)
+			raise
+		return cc
+
+	def get_deps(self):
+		return [
+			FGHHL(self.expr, self.pars_str.copy(), self.consts_str.copy(), self.ndata, self.dtype, self.write_to_file),
+			F(self.expr, self.pars_str.copy(), self.consts_str.copy(), self.ndata, self.dtype, self.write_to_file),
+			solver.GMW81Solver(self.nparam, self.dtype, self.write_to_file),
+			GainRatioStep(self.nparam, self.dtype, self.write_to_file),
+			ClampPars(self.nparam, self.dtype, self.write_to_file),
+			GradientConvergence(self.nparam, self.dtype, self.write_to_file)]
+
+	def setup(self, pars_t, consts_t, data_t, lower_bound_t, upper_bound_t):
+		self.Nprobs = data_t.shape[1]
+
+		self.pars_t = pars_t
+		self.consts_t = consts_t
+		self.data_t = data_t
+		self.lower_bound_t = lower_bound_t
+		self.upper_bound_t = upper_bound_t
+
+		self.first_f = cp.empty((1, self.Nprobs), dtype=self.dtype)
+		self.last_f = cp.empty((1, self.Nprobs), dtype=self.dtype)
+
+		self.lam_t = 5*cp.ones((1, self.Nprobs), dtype=self.dtype)
+		self.step_t = cp.empty((self.nparam, self.Nprobs), dtype=self.dtype)
+		self.f_t = cp.empty((1, self.Nprobs), dtype=self.dtype)
+		self.ftp_t = cp.empty((1, self.Nprobs), dtype=self.dtype)
+		self.g_t = cp.empty((self.nparam, self.Nprobs), dtype=self.dtype)
+		self.h_t = cp.empty((self.nhes, self.Nprobs), dtype=self.dtype)
+		self.hl_t = cp.empty((self.nhes, self.Nprobs), dtype=self.dtype)
+		self.pars_tp_t = cp.empty((self.nparam, self.Nprobs), dtype=self.dtype)
+		self.step_type_t = cp.ones((1, self.Nprobs), dtype=cp.int8)
+
+	def run(self, iters: int, tol = cp.float32(1e-8), mu = cp.float32(0.25), eta = cp.float32(0.75), acc = cp.float32(0.2), dec = cp.float32(2.0)):
+		if self.run_func == None:
+			self.build()
+
+		Nthreads = 32
+		blockSize = math.ceil(self.Nprobs / Nthreads)
+
+		for i in range(0,iters):
+			self.run_func((blockSize,),(Nthreads,),(self.consts_t, self.data_t, self.lower_bound_t, self.upper_bound_t, 
+				tol, mu, eta, acc, dec,
+				self.pars_t, self.pars_tp_t, self.step_t, self.lam_t, self.step_type_t, self.f_t, self.ftp_t, self.g_t, self.h_t, self.hl_t, self.Nprobs))
+
+			if i == 0:
+				self.first_f = self.f_t.copy()
+			if i == iters-1:
+				self.last_f = self.f_t.copy()
+
+class RandomSearch(CudaFunction):
+	def __init__(self, expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype, write_to_file: bool = False):
+		self.nparam = len(pars_str)
+		self.nhes = round(self.nparam * (self.nparam + 1) / 2)
+		self.nconst = len(consts_str)
+		self.ndata = ndata
+		self.dtype = dtype
+
+		self.write_to_file = write_to_file
+
+		self.expr = expr
+		self.pars_str = pars_str.copy()
+		self.consts_str = consts_str.copy()
+
+		self.fcu = F(self.expr, self.pars_str.copy(), self.consts_str.copy(), self.ndata, self.dtype, self.write_to_file)
+		self.fcu.build()
+
+		self.Nprobs = int(1)
+
+	def setup(self, consts_t, data_t, lower_bound_t, upper_bound_t):
+		self.Nprobs = data_t.shape[1]
+
+		self.best_pars_t = cp.empty((self.nparam, self.Nprobs), dtype=self.dtype)
+		self.consts_t = consts_t
+		self.data_t = data_t
+		self.lower_bound_t = lower_bound_t
+		self.upper_bound_t = upper_bound_t
+
+		self.step_type_t = cp.ones((1,self.Nprobs), dtype=cp.int8)
+
+		self.best_f_t = (cp.finfo(self.dtype).max / 5) * cp.ones((1,self.Nprobs), dtype=self.dtype)
+		self.f_t = cp.empty((1,self.Nprobs), dtype=self.dtype)
+
+	def run(self, iters: int):
+
+		for i in range(0,iters):
+			self.f_t.fill(0.0)
+
+			rand_pars = cp.random.rand(self.nparam, self.Nprobs).astype(dtype=self.dtype, order='C')
+			rand_pars *= (self.upper_bound_t - self.lower_bound_t)
+			rand_pars += self.lower_bound_t
+
+			self.fcu.run(rand_pars, self.consts_t, self.data_t, self.step_type_t, self.f_t)
+
+			mask = (self.f_t < self.best_f_t).squeeze(0)
+			self.best_pars_t[:,mask] = rand_pars[:,mask]
+			mask = cp.expand_dims(mask, axis=0)
+			self.best_f_t[mask] = self.f_t[mask]
 			
-			self.convcu.run(self.pars_t, self.g_t, self.f_t, self.lower_bound_t, 
-			   self.upper_bound_t, self.step_type_t, cp.float32(tol))
-
-
-
 

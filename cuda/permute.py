@@ -15,7 +15,8 @@ def lid_code():
 	codestr = Template(
 """
 __device__
-int lid(int i, int j) {
+int lid(int i, int j) 
+{
 	return i*(i+1)/2 + j;
 }
 """)
@@ -44,7 +45,8 @@ def max_diag_abs_code(ndim: int, dtype: cp.dtype):
 	codestr = Template(
 """
 __device__
-int {{funcid}}(const {{fp_type}}* mat, int offset) {
+int {{funcid}}(const {{fp_type}}* mat, int offset) 
+{
 	{{fp_type}} max_abs = -1.0f;
 	int max_index = 0;
 	for (int i = offset; i < {{ndim}}; ++i) {
@@ -87,7 +89,8 @@ def row_interchange_i_code(ndim: int, dtype: cp.dtype):
 	codestr = Template(
 """
 __device__
-void {{funcid}}({{fp_type}}* mat, int ii, int jj) {
+void {{funcid}}({{fp_type}}* mat, int ii, int jj) 
+{
 	for (int k = 0; k < {{ndim}}; ++k) {
 		int ikn = ii*{{ndim}}+k;
 		int jkn = jj*{{ndim}}+k;
@@ -130,7 +133,8 @@ def col_interchange_i_code(ndim: int, dtype: cp.dtype):
 	codestr = Template(
 """
 __device__
-void {{funcid}}({{fp_type}}* mat, int ii, int jj) {
+void {{funcid}}({{fp_type}}* mat, int ii, int jj) 
+{
 	for (int k = 0; k < {{ndim}}; ++k) {
 		int kin = k*{{ndim}}+ii;
 		int kjn = k*{{ndim}}+jj;
@@ -141,7 +145,6 @@ void {{funcid}}({{fp_type}}* mat, int ii, int jj) {
 		mat[kjn] = temp;
 	}
 }
-
 """)
 
 	type = ctc.check_fp32_or_fp64(CudaTensor(None, dtype), 'col_interchange_i')
@@ -174,7 +177,8 @@ def diag_pivot_code(ndim: int, dtype: cp.dtype):
 	codestr = Template(
 """
 __device__
-void {{funcid}}({{fp_type}}* mat, int* perm) {
+void {{funcid}}({{fp_type}}* mat, int* perm) 
+{
 	for (int i = 0; i < {{ndim}}; ++i) {
 		perm[i] = i;
 	}
@@ -224,7 +228,8 @@ def permute_vec_code(ndim: int, dtype: cp.dtype):
 	codestr = Template(
 """
 __device__
-void {{funcid}}(const {{fp_type}}* vec, const int* perm, {{fp_type}}* ovec) {
+void {{funcid}}(const {{fp_type}}* vec, const int* perm, {{fp_type}}* ovec) 
+{
 	for (int i = 0; i < {{ndim}}; ++i) {
 		ovec[i] = vec[perm[i]];
 	}
@@ -261,7 +266,8 @@ def inv_permute_vec_code(ndim: int, dtype: cp.dtype):
 	codestr = Template(
 """
 __device__
-void {{funcid}}(const {{fp_type}}* vec, const int* perm, {{fp_type}}* ovec) {
+void {{funcid}}(const {{fp_type}}* vec, const int* perm, {{fp_type}}* ovec) 
+{
 	for (int i = 0; i < {{ndim}}; ++i) {
 		ovec[perm[i]] = vec[i];
 	}

@@ -21,7 +21,8 @@ def gmw81_code(ndim: int, dtype: cp.dtype):
 	codestr = Template(
 """
 __device__
-void {{funcid}}({{fp_type}}* mat) {
+void {{funcid}}({{fp_type}}* mat) 
+{
 	{{fp_type}} t0;
 	{{fp_type}} t1 = 0.0f; // gamma
 	{{fp_type}} t2 = 0.0f; // nu
@@ -181,7 +182,8 @@ def ldl_code(ndim: int, dtype: cp.dtype):
 	codestr = Template(
 """
 __device__
-void {{funcid}}({{fp_type}}* mat) {
+void {{funcid}}({{fp_type}}* mat) 
+{
 	{{fp_type}} arr[{{ndim}}];
 	for (int i = 0; i < {{ndim}}; ++i) {
 		{{fp_type}} d = mat[i*ndim + i];
@@ -287,7 +289,8 @@ def forward_subs_unit_diaged_code(ndim: int, dtype: cp.dtype):
 	codestr = Template(
 """
 __device__
-void {{funcid}}(const {{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol) {
+void {{funcid}}(const {{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol) 
+{
 	for (int i = 0; i < {{ndim}}; ++i) {
 		sol[i] = rhs[i];
 		for (int j = 0; j < i; ++j) {
@@ -329,8 +332,8 @@ def backward_subs_unit_t_code(ndim: int, dtype: cp.dtype):
 	codestr = Template(
 """
 __device__
-void {{funcid}}(const {{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol) {
-	#pragma unroll
+void {{funcid}}(const {{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol) 
+{
 	for (int i = {{ndim}} - 1; i >= 0; --i) {
 		sol[i] = rhs[i];
 		for (int j = i + 1; j < {{ndim}}; ++j) {
@@ -373,7 +376,8 @@ def ldl_solve_code(ndim: int, dtype: cp.dtype):
 	codestr = Template(
 """
 __device__
-void {{funcid}}(const {{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol) {
+void {{funcid}}(const {{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol) 
+{
 	{{fp_type}} arr[{{ndim}}];
 	{{forward_funcid}}(mat, rhs, arr);
 	{{backward_funcid}}(mat, arr, sol);
@@ -418,7 +422,8 @@ def gmw81_solver_code(ndim: int, dtype: cp.dtype):
 	codestr = Template(
 """
 __device__
-void {{funcid}}({{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol) {	
+void {{funcid}}({{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol) 
+{	
 	// Diagonal pivoting of matrix and right hand side
 	int perm[{{ndim}}];
 	{{fp_type}} arr1[{{ndim}}];
@@ -511,7 +516,7 @@ class GMW81Solver(CudaFunction):
 		temp = Template(
 """
 extern \"C\" __global__
-void {{funcid}}(const {{fp_type}}* mat, const {{fp_type}}* rhs, const char* step_type, {{fp_type}}* sol, int N) 
+void {{funcid}}(const {{fp_type}}* mat, const {{fp_type}}* rhs, const char* step_type, {{fp_type}}* sol, int Nprobs) 
 {
 	int tid = blockDim.x * blockIdx.x + threadIdx.x;
 
@@ -526,14 +531,14 @@ void {{funcid}}(const {{fp_type}}* mat, const {{fp_type}}* rhs, const char* step
 		{{fp_type}} sol_copy[{{ndim}}];
 
 		for (int i = 0; i < {{ndim}}; ++i) {
-			rhs_copy[i] = rhs[i*N+tid];
-			sol_copy[i] = sol[i*N+tid];
+			rhs_copy[i] = rhs[i*Nprobs+tid];
+			sol_copy[i] = sol[i*Nprobs+tid];
 		}
 
 		int k = 0;
 		for (int i = 0; i < {{ndim}}; ++i) {
 			for (int j = 0; j <= i; ++j) {
-				{{fp_type}} temp = mat[k*N+tid];
+				{{fp_type}} temp = mat[k*Nprobs+tid];
 				mat_copy[i*{{ndim}}+j] = temp;
 				if (i != j) {
 					mat_copy[j*{{ndim}}+i] = temp;
@@ -545,7 +550,7 @@ void {{funcid}}(const {{fp_type}}* mat, const {{fp_type}}* rhs, const char* step
 		{{dfuncid}}(mat_copy, rhs_copy, sol_copy);
 
 		for (int i = 0; i < {{ndim}}; ++i) {
-			sol[i*N+tid] = sol_copy[i];
+			sol[i*Nprobs+tid] = sol_copy[i];
 		}
 	}
 }
@@ -577,9 +582,6 @@ void {{funcid}}(const {{fp_type}}* mat, const {{fp_type}}* rhs, const char* step
 			raise
 		return cc
 
-		self.run_func = self.mod.get_function(self.get_kernel_funcid())
-		return cc
-
 	def get_deps(self):
 		return [permute.DiagPivot(self.ndim, self.dtype), GMW81(self.ndim, self.dtype),
 			permute.PermuteVec(self.ndim, self.dtype), LDLSolve(self.ndim, self.dtype),
@@ -593,7 +595,8 @@ def ldl_solver_code(ndim: int, dtype: cp.dtype):
 	codestr = Template(
 """
 __device__
-void {{funcid}}({{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol) {
+void {{funcid}}({{fp_type}}* mat, const {{fp_type}}* rhs, {{fp_type}}* sol) 
+{
 	{{ldl_funcid}}(mat);
 	{{ldl_solve_funcid}}(mat, rhs, sol);
 }

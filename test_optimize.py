@@ -28,6 +28,8 @@ data[:,0] = np.array([908.02686, 905.39154, 906.08997, 700.7829, 753.0848, 859.9
 with open('bvals_ivim.npy', 'rb') as f:
     consts[:,:,0] = np.load(f).astype(cp.float32).reshape((1,ndata))
 
+pars[:,0] = np.array([700.0, 0.2, 0.1, 0.001], dtype=np.float32)
+
 
 first_f = np.empty((1,batch_size), dtype=np.float32)
 last_f = np.empty((1, batch_size), dtype=np.float32)
@@ -46,7 +48,9 @@ lower_bound_cu = cp.array(lower_bound, dtype=cp.float32, copy=True, order='C')
 upper_bound_cu = cp.array(upper_bound, dtype=cp.float32, copy=True, order='C')
 
 solm.setup(parscu, constscu, datacu, lower_bound_cu, upper_bound_cu)
-solm.run(20, 1e-30)
+solm.run(1, 1e-30)
+
+print(solm.h_t[:,0])
 
 first_f = solm.first_f.get()
 last_f = solm.last_f.get()
