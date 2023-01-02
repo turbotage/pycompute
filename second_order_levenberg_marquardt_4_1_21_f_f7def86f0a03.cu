@@ -307,7 +307,7 @@ void gmw81_solver_4_f(float* mat, const float* rhs, float* sol)
 __device__
 void gain_ratio_step_4_f(const float* f, const float* ftp, const float* pars_tp, const float* step,
 	const float* g, const float* h, float* pars, 
-	float* lam, char* step_type, float mu, float eta, float acc, float dec, int tid, int N) 
+	float* lam, char* step_type, float mu, float eta, float acc, float dec, int tid, int Nprobs) 
 {
 
 	float actual = 0.5f * (f[tid] - ftp[tid]);
@@ -316,7 +316,7 @@ void gain_ratio_step_4_f(const float* f, const float* ftp, const float* pars_tp,
 	int k = 0;
 	for (int i = 0; i < 4; ++i) {
 		for (int j = 0; j <= i; ++j) {
-			float entry = h[k*N+tid] * step[i*N+tid] * step[j*N+tid];
+			float entry = h[k*Nprobs+tid] * step[i*Nprobs+tid] * step[j*Nprobs+tid];
 			if (i == j) {
 				predicted -= entry;
 			} else {
@@ -328,7 +328,7 @@ void gain_ratio_step_4_f(const float* f, const float* ftp, const float* pars_tp,
 	predicted *= 0.5f;
 
 	for (int i = 0; i < 4; ++i) {
-		int iidx = i*N+tid;
+		int iidx = i*Nprobs+tid;
 		predicted += step[iidx] * g[iidx];
 	}
 
@@ -336,14 +336,14 @@ void gain_ratio_step_4_f(const float* f, const float* ftp, const float* pars_tp,
 
 	if ((rho > mu) && (actual > 0)) {
 		for (int i = 0; i < 4; ++i) {
-			if (tid == 100) {
-				printf("cp ");
-			}
-			int iidx = i*N+tid;
+			int iidx = i*Nprobs+tid;
 			pars[iidx] = pars_tp[iidx];
+			if (tid == 0) {
+				printf("pars copied ");
+			}
 		}
 		if (rho > eta) {
-			lam[tid] /= acc;
+			lam[tid] *= acc;
 			step_type[tid] = 1;
 		} else {
 			step_type[tid] = 2;
@@ -358,8 +358,8 @@ void gain_ratio_step_4_f(const float* f, const float* ftp, const float* pars_tp,
 		step_type[tid] |= 8;
 	}
 
-	if (tid == 100) {
-		printf("actual=%f, rho=%f, predicted=%f, step_type=%d, f=%f\n", actual, rho, predicted, step_type[tid], f[tid]);
+	if (tid == 0) {
+		printf(" rho=%f, actual=%f, f=%f, \n", rho, actual, f[tid]);
 	}
 
 }
@@ -501,7 +501,7 @@ void second_order_levenberg_marquardt_4_1_21_f_f7def86f0a03(const float* consts,
 
 	// Calculate error at new params
 	{
-		f_4_1_21_f_f7def86f0a03(params_tp, consts, data, params, tid, Nprobs);
+		f_4_1_21_f_f7def86f0a03(params_tp, consts, data, ftp, tid, Nprobs);
 	}
 
 	// Calculate gain ratio and determine step type

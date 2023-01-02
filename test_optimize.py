@@ -48,7 +48,7 @@ lower_bound_cu = cp.array(lower_bound, dtype=cp.float32, copy=True, order='C')
 upper_bound_cu = cp.array(upper_bound, dtype=cp.float32, copy=True, order='C')
 
 solm.setup(parscu, constscu, datacu, lower_bound_cu, upper_bound_cu)
-solm.run(1, 1e-30)
+solm.run(20, 1e-30)
 
 print(solm.h_t[:,0])
 

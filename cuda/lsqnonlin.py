@@ -407,7 +407,7 @@ def gain_ratio_step_code(nparam: int, dtype: cp.dtype):
 __device__
 void {{funcid}}(const {{fp_type}}* f, const {{fp_type}}* ftp, const {{fp_type}}* pars_tp, const {{fp_type}}* step,
 	const {{fp_type}}* g, const {{fp_type}}* h, {{fp_type}}* pars, 
-	{{fp_type}}* lam, char* step_type, {{fp_type}} mu, {{fp_type}} eta, {{fp_type}} acc, {{fp_type}} dec, int tid, int N) 
+	{{fp_type}}* lam, char* step_type, {{fp_type}} mu, {{fp_type}} eta, {{fp_type}} acc, {{fp_type}} dec, int tid, int Nprobs) 
 {
 
 	{{fp_type}} actual = 0.5f * (f[tid] - ftp[tid]);
@@ -416,7 +416,7 @@ void {{funcid}}(const {{fp_type}}* f, const {{fp_type}}* ftp, const {{fp_type}}*
 	int k = 0;
 	for (int i = 0; i < {{nparam}}; ++i) {
 		for (int j = 0; j <= i; ++j) {
-			float entry = h[k*N+tid] * step[i*N+tid] * step[j*N+tid];
+			float entry = h[k*Nprobs+tid] * step[i*Nprobs+tid] * step[j*Nprobs+tid];
 			if (i == j) {
 				predicted -= entry;
 			} else {
@@ -428,7 +428,7 @@ void {{funcid}}(const {{fp_type}}* f, const {{fp_type}}* ftp, const {{fp_type}}*
 	predicted *= 0.5f;
 
 	for (int i = 0; i < {{nparam}}; ++i) {
-		int iidx = i*N+tid;
+		int iidx = i*Nprobs+tid;
 		predicted += step[iidx] * g[iidx];
 	}
 
@@ -436,14 +436,14 @@ void {{funcid}}(const {{fp_type}}* f, const {{fp_type}}* ftp, const {{fp_type}}*
 
 	if ((rho > mu) && (actual > 0)) {
 		for (int i = 0; i < {{nparam}}; ++i) {
-			if (tid == 100) {
-				printf("cp ");
-			}
-			int iidx = i*N+tid;
+			int iidx = i*Nprobs+tid;
 			pars[iidx] = pars_tp[iidx];
+			if (tid == 0) {
+				printf("pars copied ");
+			}
 		}
 		if (rho > eta) {
-			lam[tid] /= acc;
+			lam[tid] *= acc;
 			step_type[tid] = 1;
 		} else {
 			step_type[tid] = 2;
@@ -458,8 +458,8 @@ void {{funcid}}(const {{fp_type}}* f, const {{fp_type}}* ftp, const {{fp_type}}*
 		step_type[tid] |= 8;
 	}
 
-	if (tid == 100) {
-		printf("actual=%f, rho=%f, predicted=%f, step_type=%d, f=%f\\n", actual, rho, predicted, step_type[tid], f[tid]);
+	if (tid == 0) {
+		printf(" rho=%f, actual=%f, f=%f, \\n", rho, actual, f[tid]);
 	}
 
 }
@@ -779,90 +779,6 @@ void {{funcid}}(const float* pars, const float* g, const {{fp_type}}* f, const {
 		return list()
 
 
-class SecondOrderLevenbergMarquardtOld(CudaFunction):
-	def __init__(self, expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype, write_to_file: bool = False):
-		self.nparam = len(pars_str)
-		self.nhes = round(self.nparam * (self.nparam + 1) / 2)
-		self.nconst = len(consts_str)
-		self.ndata = ndata
-		self.dtype = dtype
-
-		self.write_to_file = write_to_file
-
-		self.expr = expr
-		self.pars_str = pars_str.copy()
-		self.consts_str = consts_str.copy()
-
-		self.fgradcu = FGHHL(self.expr, self.pars_str.copy(), self.consts_str.copy(), self.ndata, self.dtype, self.write_to_file)
-		self.fgradcu.build()
-		self.fcu = F(self.expr, self.pars_str.copy(), self.consts_str.copy(), self.ndata, self.dtype, self.write_to_file)
-		self.fcu.build()
-		self.gmw81solcu = solver.GMW81Solver(self.nparam, self.dtype, self.write_to_file)
-		self.gmw81solcu.build()
-		self.gaincu = GainRatioStep(self.nparam, self.dtype, self.write_to_file)
-		self.gaincu.build()
-		self.clampcu = ClampPars(self.nparam, self.dtype, self.write_to_file)
-		self.clampcu.build()
-		self.convcu = GradientConvergence(self.nparam, self.dtype, self.write_to_file)
-		self.convcu.build()
-
-		self.Nprobs = int(1)
-
-	def setup(self, pars_t, consts_t, data_t, lower_bound_t, upper_bound_t):
-		self.Nprobs = data_t.shape[1]
-
-		self.pars_t = pars_t
-		self.consts_t = consts_t
-		self.data_t = data_t
-		self.lower_bound_t = lower_bound_t
-		self.upper_bound_t = upper_bound_t
-
-		self.first_f = cp.empty((1, self.Nprobs), dtype=self.dtype)
-		self.last_f = cp.empty((1, self.Nprobs), dtype=self.dtype)
-
-		self.lam_t = 5*cp.ones((1, self.Nprobs), dtype=self.dtype)
-		self.step_t = cp.empty((self.nparam, self.Nprobs), dtype=self.dtype)
-		self.f_t = cp.empty((1, self.Nprobs), dtype=self.dtype)
-		self.ftp_t = cp.empty((1, self.Nprobs), dtype=self.dtype)
-		self.g_t = cp.empty((self.nparam, self.Nprobs), dtype=self.dtype)
-		self.h_t = cp.empty((self.nhes, self.Nprobs), dtype=self.dtype)
-		self.hl_t = cp.empty((self.nhes, self.Nprobs), dtype=self.dtype)
-		self.pars_tp_t = cp.empty((self.nparam, self.Nprobs), dtype=self.dtype)
-		self.step_type_t = cp.ones((1, self.Nprobs), dtype=cp.int8)
-
-	def run(self, iters: int, tol: float):
-
-		for i in range(0,iters):
-			self.f_t.fill(0.0)
-			self.ftp_t.fill(0.0)
-			self.g_t.fill(0.0)
-			self.h_t.fill(0.0)
-			self.hl_t.fill(0.0)
-
-			self.fgradcu.run(self.pars_t, self.consts_t, self.data_t, self.lam_t, self.step_type_t,
-				self.f_t, self.g_t, self.h_t, self.hl_t)
-			self.gmw81solcu.run(self.hl_t, self.g_t, self.step_type_t, self.step_t)
-
-			if i == 0:
-				self.first_f = self.f_t.copy()
-			if i == iters-1:
-				self.last_f = self.f_t.copy()
-
-			self.step_t = cp.nan_to_num(self.step_t, copy=False, posinf=0.0, neginf=0.0)
-
-			self.convcu.run(self.pars_t, self.g_t, self.f_t, self.lower_bound_t, 
-			   self.upper_bound_t, self.step_type_t, cp.float32(tol))
-
-			cp.subtract(self.pars_t, self.step_t, out=self.pars_tp_t)
-
-			self.fcu.run(self.pars_tp_t, self.consts_t, self.data_t, self.step_type_t, self.ftp_t)
-			
-			self.gaincu.run(self.f_t, self.ftp_t, self.pars_tp_t, self.step_t, 
-			   self.g_t, self.h_t, self.pars_t, self.lam_t, self.step_type_t)
-
-			self.clampcu.run(self.lower_bound_t, self.upper_bound_t, self.step_type_t, self.pars_t)
-
-
 def second_order_levenberg_marquardt_funcid(expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
 	return 'second_order_levenberg_marquardt' + ctc.dim_dim_dim_type_funcid(len(pars_str), len(consts_str), ndata,
 		dtype, 'second_order_levenberg_marquardt') + '_' + util.expr_hash(expr, 12)
@@ -958,7 +874,7 @@ void {{funcid}}(const {{fp_type}}* consts, const {{fp_type}}* data, const {{fp_t
 
 	// Calculate error at new params
 	{
-		{{fobj_funcid}}(params_tp, consts, data, params, tid, Nprobs);
+		{{fobj_funcid}}(params_tp, consts, data, ftp, tid, Nprobs);
 	}
 
 	// Calculate gain ratio and determine step type
@@ -1112,13 +1028,59 @@ void {{funcid}}(const {{fp_type}}* consts, const {{fp_type}}* data, const {{fp_t
 			if i == iters-1:
 				self.last_f = self.f_t.copy()
 
-class RandomSearch(CudaFunction):
+
+def search_step_funcid(expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
+	return 'random_search' + ctc.dim_dim_dim_type_funcid(len(pars_str), len(consts_str), ndata,
+		dtype, 'random_search') + '_' + util.expr_hash(expr, 12)
+
+def search_step_code(expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
+	codestr = Template(
+"""
+__device__
+void {{funcid}}(const {{fp_type}}* consts, const {{fp_type}}* data, const {{fp_type}}* lower_bound, const {{fp_type}}* upper_bound, 
+	{{fp_type}}* best_p, {{fp_type}}* p, {{fp_type}}* best_f, {{fp_type}}* f, int tid, int Nprobs)
+{
+	
+	// Calculate error at new params
+	{
+		{{fobj_funcid}}(p, consts, data, f, tid, Nprobs);
+	}
+
+	// Check if new params is better and keep them in that case
+	{
+		if (f[tid] < best_f[tid]) {
+			for (int i = 0; i < {{nparam}}; ++i) {
+				int iidx = i*Nprobs+tid;
+				best_p[iidx] = p[iidx];
+			}
+			best_f[tid] = f[tid];
+		}
+	}
+
+}
+""")
+
+	nparam = len(pars_str)
+	nconst = len(consts_str)
+	nhes = round(nparam*(nparam+1)/2)
+
+	funcid = search_step_funcid(expr, pars_str, consts_str, ndata, dtype)
+
+	type = ctc.check_fp32_or_fp64(CudaTensor(None, dtype), 'search_step')
+
+	fobj_funcid = f_funcid(expr, pars_str, consts_str, ndata, dtype)
+
+	return codestr.render(funcid=funcid, nparam=nparam, nconst=nconst, nhes=nhes, fp_type=type,
+		fobj_funcid=fobj_funcid)
+
+class SearchStep(CudaFunction):
 	def __init__(self, expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype, write_to_file: bool = False):
 		self.nparam = len(pars_str)
 		self.nhes = round(self.nparam * (self.nparam + 1) / 2)
 		self.nconst = len(consts_str)
 		self.ndata = ndata
 		self.dtype = dtype
+		self.type_str = ctc.type_to_typestr(dtype)
 
 		self.write_to_file = write_to_file
 
@@ -1126,39 +1088,119 @@ class RandomSearch(CudaFunction):
 		self.pars_str = pars_str.copy()
 		self.consts_str = consts_str.copy()
 
-		self.fcu = F(self.expr, self.pars_str.copy(), self.consts_str.copy(), self.ndata, self.dtype, self.write_to_file)
-		self.fcu.build()
+		self.funcid = search_step_funcid(expr, pars_str.copy(), consts_str.copy(), ndata, dtype)
+		self.code = search_step_code(expr, pars_str.copy(), consts_str.copy(), ndata, dtype)
 
 		self.Nprobs = int(1)
+
+	def get_device_funcid(self):
+		return self.funcid
+
+	def get_kernel_funcid(self):
+		funcid = self.funcid
+		return 'k_' + funcid
+
+	def get_device_code(self):
+		return self.code
+
+	def get_kernel_code(self):
+		temp = Template(
+"""
+extern \"C\" __global__
+void {{funcid}}(const {{fp_type}}* consts, const {{fp_type}}* data, const {{fp_type}}* lower_bound, const {{fp_type}}* upper_bound, 
+	{{fp_type}}* best_p, {{fp_type}}* p, {{fp_type}}* best_f, {{fp_type}}* f, int Nprobs) 
+{
+	int tid = blockDim.x * blockIdx.x + threadIdx.x;
+
+	if (tid < Nprobs) {
+		{{dfuncid}}(consts, data, lower_bound, upper_bound, best_p, p, best_f, f, tid, Nprobs);
+	}
+}
+""")
+		fid = self.get_kernel_funcid()
+		dfid = self.get_device_funcid()
+
+		return temp.render(funcid=fid, dfuncid=dfid, fp_type=self.type_str)
+
+	def build(self):
+		cc = cudap.code_gen_walking(self, "")
+		if self.write_to_file:
+			with open(self.get_device_funcid()+'.cu', "w") as f:
+				f.write(cc)
+		try:
+			self.mod = cp.RawModule(code=cc)
+			self.run_func = self.mod.get_function(self.get_kernel_funcid())
+		except:
+			with open("on_compile_fail.cu", "w") as f:
+				f.write(cc)
+			raise
+		return cc
+
+	def get_deps(self):
+		return [F(self.expr, self.pars_str.copy(), self.consts_str.copy(), self.ndata, self.dtype, self.write_to_file)]
 
 	def setup(self, consts_t, data_t, lower_bound_t, upper_bound_t):
 		self.Nprobs = data_t.shape[1]
 
-		self.best_pars_t = cp.empty((self.nparam, self.Nprobs), dtype=self.dtype)
 		self.consts_t = consts_t
 		self.data_t = data_t
 		self.lower_bound_t = lower_bound_t
 		self.upper_bound_t = upper_bound_t
 
-		self.step_type_t = cp.ones((1,self.Nprobs), dtype=cp.int8)
+	def run(self, f, best_f, p, best_p):
 
-		self.best_f_t = (cp.finfo(self.dtype).max / 5) * cp.ones((1,self.Nprobs), dtype=self.dtype)
-		self.f_t = cp.empty((1,self.Nprobs), dtype=self.dtype)
+		Nthreads = 32
+		blockSize = math.ceil(self.Nprobs / Nthreads)
 
-	def run(self, iters: int):
+		self.run_func((blockSize,),(Nthreads,),(self.consts_t, self.data_t, self.lower_bound_t, self.upper_bound_t, best_p, p, best_f, f, self.Nprobs))
 
-		for i in range(0,iters):
-			self.f_t.fill(0.0)
 
-			rand_pars = cp.random.rand(self.nparam, self.Nprobs).astype(dtype=self.dtype, order='C')
-			rand_pars *= (self.upper_bound_t - self.lower_bound_t)
-			rand_pars += self.lower_bound_t
+class SecondOrderRandomSearch(CudaFunction):
+		def __init__(self, expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype, write_to_file: bool = False):
+			self.nparam = len(pars_str)
+			self.nhes = round(self.nparam * (self.nparam + 1) / 2)
+			self.nconst = len(consts_str)
+			self.ndata = ndata
+			self.dtype = dtype
 
-			self.fcu.run(rand_pars, self.consts_t, self.data_t, self.step_type_t, self.f_t)
+			self.write_to_file = write_to_file
 
-			mask = (self.f_t < self.best_f_t).squeeze(0)
-			self.best_pars_t[:,mask] = rand_pars[:,mask]
-			mask = cp.expand_dims(mask, axis=0)
-			self.best_f_t[mask] = self.f_t[mask]
+			self.expr = expr
+			self.pars_str = pars_str.copy()
+			self.consts_str = consts_str.copy()
+
+			self.lm = SecondOrderLevenbergMarquardt(self.expr, self.pars_str.copy(), self.consts_str.copy(), self.ndata, self.dtype, self.write_to_file)
+			self.lm.build()
+			self.ss = SearchStep(self.expr, self.pars_str.copy(), self.consts_str.copy(), self.ndata, self.dtype, self.write_to_file)
+			self.ss.build()
+
+			self.Nprobs = int(1)
+
+		def setup(self, consts_t, data_t, lower_bound_t, upper_bound_t):
+			self.Nprobs = data_t.shape[1]
+
+			self.best_pars_t = cp.empty((self.nparam, self.Nprobs), dtype=self.dtype)
+			self.consts_t = consts_t
+			self.data_t = data_t
+			self.lower_bound_t = lower_bound_t
+			self.upper_bound_t = upper_bound_t
+
+			self.best_f_t = (cp.finfo(self.dtype).max / 5) * cp.ones((1,self.Nprobs), dtype=self.dtype)
 			
+		def run(self, iters: int):
+
+			self.ss.setup(self.consts_t, self.data_t, self.lower_bound_t, self.upper_bound_t)
+
+			for i in range(0,iters):
+
+				rand_pars = cp.random.rand(self.nparam, self.Nprobs).astype(dtype=self.dtype, order='C')
+				rand_pars *= (self.upper_bound_t - self.lower_bound_t)
+				rand_pars += self.lower_bound_t
+
+				self.lm.setup(rand_pars, self.consts_t, self.data_t, self.lower_bound_t, self.upper_bound_t)
+				self.lm.run(20, 1e-9)
+				
+				self.ss.run(self.lm.f_t, self.best_f_t, self.lm.pars_t, self.best_pars_t)
+
+
 
