@@ -1155,52 +1155,95 @@ void {{funcid}}(const {{fp_type}}* consts, const {{fp_type}}* data, const {{fp_t
 		self.run_func((blockSize,),(Nthreads,),(self.consts_t, self.data_t, self.lower_bound_t, self.upper_bound_t, best_p, p, best_f, f, self.Nprobs))
 
 
+class RandomSearch(CudaFunction):
+	def __init__(self, expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype, write_to_file: bool = False):
+		self.nparam = len(pars_str)
+		self.nconst = len(consts_str)
+		self.ndata = ndata
+		self.dtype = dtype
+
+		self.write_to_file = write_to_file
+
+		self.expr = expr
+		self.pars_str = pars_str.copy()
+		self.consts_str = consts_str.copy()
+
+		self.ss = SearchStep(self.expr, self.pars_str.copy(), self.consts_str.copy(), self.ndata, self.dtype, self.write_to_file)
+		self.ss.build()
+
+		self.Nprobs = int(1)
+
+	def setup(self, consts_t, data_t, lower_bound_t, upper_bound_t):
+		self.Nprobs = data_t.shape[1]
+
+		self.best_pars_t = cp.empty((self.nparam, self.Nprobs), dtype=self.dtype)
+		self.consts_t = consts_t
+		self.data_t = data_t
+		self.lower_bound_t = lower_bound_t
+		self.upper_bound_t = upper_bound_t
+
+		self.best_f_t = (cp.finfo(self.dtype).max / 5) * cp.ones((1,self.Nprobs), dtype=self.dtype)
+		self.f_t = cp.empty((1,self.Nprobs), dtype=self.dtype)
+		
+	def run(self, iters: int):
+
+		self.ss.setup(self.consts_t, self.data_t, self.lower_bound_t, self.upper_bound_t)
+
+		for i in range(0,iters):
+
+			rand_pars = cp.random.rand(self.nparam, self.Nprobs).astype(dtype=self.dtype, order='C')
+			rand_pars *= (self.upper_bound_t - self.lower_bound_t)
+			rand_pars += self.lower_bound_t
+
+			self.ss.run(self.f_t, self.best_f_t, rand_pars, self.best_pars_t)
+
+
 class SecondOrderRandomSearch(CudaFunction):
-		def __init__(self, expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype, write_to_file: bool = False):
-			self.nparam = len(pars_str)
-			self.nhes = round(self.nparam * (self.nparam + 1) / 2)
-			self.nconst = len(consts_str)
-			self.ndata = ndata
-			self.dtype = dtype
+	def __init__(self, expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype, write_to_file: bool = False):
+		self.nparam = len(pars_str)
+		self.nhes = round(self.nparam * (self.nparam + 1) / 2)
+		self.nconst = len(consts_str)
+		self.ndata = ndata
+		self.dtype = dtype
 
-			self.write_to_file = write_to_file
+		self.write_to_file = write_to_file
 
-			self.expr = expr
-			self.pars_str = pars_str.copy()
-			self.consts_str = consts_str.copy()
+		self.expr = expr
+		self.pars_str = pars_str.copy()
+		self.consts_str = consts_str.copy()
 
-			self.lm = SecondOrderLevenbergMarquardt(self.expr, self.pars_str.copy(), self.consts_str.copy(), self.ndata, self.dtype, self.write_to_file)
-			self.lm.build()
-			self.ss = SearchStep(self.expr, self.pars_str.copy(), self.consts_str.copy(), self.ndata, self.dtype, self.write_to_file)
-			self.ss.build()
+		self.lm = SecondOrderLevenbergMarquardt(self.expr, self.pars_str.copy(), self.consts_str.copy(), self.ndata, self.dtype, self.write_to_file)
+		self.lm.build()
+		self.ss = SearchStep(self.expr, self.pars_str.copy(), self.consts_str.copy(), self.ndata, self.dtype, self.write_to_file)
+		self.ss.build()
 
-			self.Nprobs = int(1)
+		self.Nprobs = int(1)
 
-		def setup(self, consts_t, data_t, lower_bound_t, upper_bound_t):
-			self.Nprobs = data_t.shape[1]
+	def setup(self, consts_t, data_t, lower_bound_t, upper_bound_t):
+		self.Nprobs = data_t.shape[1]
 
-			self.best_pars_t = cp.empty((self.nparam, self.Nprobs), dtype=self.dtype)
-			self.consts_t = consts_t
-			self.data_t = data_t
-			self.lower_bound_t = lower_bound_t
-			self.upper_bound_t = upper_bound_t
+		self.best_pars_t = cp.empty((self.nparam, self.Nprobs), dtype=self.dtype)
+		self.consts_t = consts_t
+		self.data_t = data_t
+		self.lower_bound_t = lower_bound_t
+		self.upper_bound_t = upper_bound_t
 
-			self.best_f_t = (cp.finfo(self.dtype).max / 5) * cp.ones((1,self.Nprobs), dtype=self.dtype)
+		self.best_f_t = (cp.finfo(self.dtype).max / 5) * cp.ones((1,self.Nprobs), dtype=self.dtype)
+		
+	def run(self, iters: int, lm_iters: int = 20, tol = cp.float32(1e-8)):
+
+		self.ss.setup(self.consts_t, self.data_t, self.lower_bound_t, self.upper_bound_t)
+
+		for i in range(0,iters):
+
+			rand_pars = cp.random.rand(self.nparam, self.Nprobs).astype(dtype=self.dtype, order='C')
+			rand_pars *= (self.upper_bound_t - self.lower_bound_t)
+			rand_pars += self.lower_bound_t
+
+			self.lm.setup(rand_pars, self.consts_t, self.data_t, self.lower_bound_t, self.upper_bound_t)
+			self.lm.run(lm_iters, tol)
 			
-		def run(self, iters: int):
-
-			self.ss.setup(self.consts_t, self.data_t, self.lower_bound_t, self.upper_bound_t)
-
-			for i in range(0,iters):
-
-				rand_pars = cp.random.rand(self.nparam, self.Nprobs).astype(dtype=self.dtype, order='C')
-				rand_pars *= (self.upper_bound_t - self.lower_bound_t)
-				rand_pars += self.lower_bound_t
-
-				self.lm.setup(rand_pars, self.consts_t, self.data_t, self.lower_bound_t, self.upper_bound_t)
-				self.lm.run(20, 1e-9)
-				
-				self.ss.run(self.lm.f_t, self.best_f_t, self.lm.pars_t, self.best_pars_t)
+			self.ss.run(self.lm.f_t, self.best_f_t, self.lm.pars_t, self.best_pars_t)
 
 
 
