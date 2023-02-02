@@ -3,8 +3,8 @@ import cupy as cp
 from jinja2 import Template
 
 from pycompute.cuda import cuda_program as cudap
-from cuda_program import CudaFunction, CudaTensor
-from cuda_program import CudaTensorChecking as ctc
+from pycompute.cuda.cuda_program import CudaFunction
+from pycompute.cuda.cuda_program import CudaTensorChecking as ctc
 
 import math
 
@@ -16,8 +16,9 @@ def dft_t3_funcid(dtype: cp.dtype, sign_positive: bool):
 def dft_t3_code(dtype: cp.dtype, sign_positive: bool):
 	temp = Template(
 """
+#include <cupy/complex.cuh>
 __device__
-void {{funcid}}(const {{fp_type}}* parr, const complex<{{fp_type}}>* warr, const complex<{{fp_type}}>* varr, 
+void {{funcid}}(const {{fp_type}}* parr, const {{fp_type}}* warr, const complex<{{fp_type}}>* varr, 
 	complex<{{fp_type}}>* oarr, int tid, int nx, int nf) 
 {
 	float px, py, pz;
@@ -50,22 +51,22 @@ void {{funcid}}(const {{fp_type}}* parr, const complex<{{fp_type}}>* warr, const
 """)
 
 	type = ctc.type_to_typestr(dtype)
-	funcid = dft_t3_funcid(dtype)
+	funcid = dft_t3_funcid(dtype, sign_positive)
 	sign_str = '' if sign_positive else '-'
 	return temp.render(funcid=funcid, fp_type=type, freq_sign=sign_str)
 
 class DftT3(CudaFunction):
 	def __init__(self, dtype: cp.dtype, sign_positive: bool = True, write_to_file: bool = False):
-			self.funcid = dft_t3_funcid(dtype, sign_positive)
-			self.code = dft_t3_code(dtype, sign_positive)
+		self.funcid = dft_t3_funcid(dtype, sign_positive)
+		self.code = dft_t3_code(dtype, sign_positive)
 
-			self.write_to_file = write_to_file
+		self.write_to_file = write_to_file
 
-			self.type_str = ctc.type_to_typestr(dtype)
-			self.dtype = dtype
+		self.type_str = ctc.type_to_typestr(dtype)
+		self.dtype = dtype
 
-			self.mod = None
-			self.run_func = None
+		self.mod = None
+		self.run_func = None
 
 	def run(self, p, w, v, o):
 		if self.run_func == None:
@@ -92,7 +93,7 @@ class DftT3(CudaFunction):
 		temp = Template(
 """
 extern \"C\" __global__
-void {{funcid}}(const {{fp_type}}* parr, const complex<{{fp_type}}>* warr, const complex<{{fp_type}}>* varr, 
+void {{funcid}}(const {{fp_type}}* parr, const {{fp_type}}* warr, const complex<{{fp_type}}>* varr, 
 	complex<{{fp_type}}>* oarr, int nx, int nf) 
 {
 	int tid = blockDim.x * blockIdx.x + threadIdx.x;
@@ -140,6 +141,7 @@ def dft_adj_dft_t3_funcid(dtype: cp.dtype):
 def dft_adj_dft_t3_code(dtype: cp.dtype):
 	temp = Template(
 """
+#include <cupy/complex.cuh>
 __device__
 void {{funcid}}(const {{fp_type}}* parr, const complex<{{fp_type}}>* varr, 
 	complex<{{fp_type}}>* oarr, int tid, int nx) 
@@ -156,17 +158,21 @@ void {{funcid}}(const {{fp_type}}* parr, const complex<{{fp_type}}>* varr,
 	complex<{{fp_type}}> sum;
 
 	for (int i = 0; i < nx; ++i) {
-		px = parr[i];
-		py = parr[nx + i];
-		pz = parr[2*nx + i];
+		if (i != tid) {
+			px = parr[i];
+			py = parr[nx + i];
+			pz = parr[2*nx + i];
 
-		xdiff = px - pxt;
-		ydiff = py - pyt;
-		zdiff = pz - pzt;
+			xdiff = px - pxt;
+			ydiff = py - pyt;
+			zdiff = pz - pzt;
 
-		sinc = (sin(xdiff) * sin(ydiff) * sin(zdiff)) / (xdiff * ydiff * zdiff);
+			sinc = (sin(xdiff) * sin(ydiff) * sin(zdiff)) / (xdiff * ydiff * zdiff);
 
-		sum += varr[i] * sinc;
+			sum += varr[i] * sinc;
+		} else {
+			sum += varr[i];
+		}
 	}
 
 	oarr[tid] = sum;
@@ -180,18 +186,18 @@ void {{funcid}}(const {{fp_type}}* parr, const complex<{{fp_type}}>* varr,
 
 class DftAdjDftT3(CudaFunction):
 	def __init__(self, dtype: cp.dtype, write_to_file: bool = False):
-			self.funcid = dft_adj_dft_t3_funcid(dtype)
-			self.code = dft_adj_dft_t3_code(dtype)
+		self.funcid = dft_adj_dft_t3_funcid(dtype)
+		self.code = dft_adj_dft_t3_code(dtype)
 
-			self.write_to_file = write_to_file
+		self.write_to_file = write_to_file
 
-			self.type_str = ctc.type_to_typestr(dtype)
-			self.dtype = dtype
+		self.type_str = ctc.type_to_typestr(dtype)
+		self.dtype = dtype
 
-			self.mod = None
-			self.run_func = None
+		self.mod = None
+		self.run_func = None
 
-	def run(self, p, w, c, o):
+	def run(self, p, v, o):
 		if self.run_func == None:
 			self.build()
 
@@ -199,7 +205,7 @@ class DftAdjDftT3(CudaFunction):
 
 		Nthreads = 32
 		blockSize = math.ceil(NX / Nthreads)
-		self.run_func((blockSize,),(Nthreads,),(p, c, o, NX))
+		self.run_func((blockSize,),(Nthreads,),(p, v, o, NX))
 
 	def get_device_funcid(self):
 		return self.funcid
@@ -215,12 +221,12 @@ class DftAdjDftT3(CudaFunction):
 		temp = Template(
 """
 extern \"C\" __global__
-void {{funcid}}(const {{fp_type}}* parr, const complex<{{fp_type}}>* warr, const complex<{{fp_type}}>* carr, 
-	complex<{{fp_type}}>* oarr, int nx, int nf) 
+void {{funcid}}(const {{fp_type}}* parr, const complex<{{fp_type}}>* varr, 
+	complex<{{fp_type}}>* oarr, int nx) 
 {
 	int tid = blockDim.x * blockIdx.x + threadIdx.x;
 	if (tid < nx) {
-		{{dfuncid}}(parr, warr, carr, oarr, tid, nx, nf);
+		{{dfuncid}}(parr, varr, oarr, tid, nx);
 	}
 }
 """)
