@@ -10,7 +10,7 @@ import numpy as np
 import time
 import finufft
 
-from pycompute.cuda.fft import DftT3
+from pycompute.cuda.fourier.fourier import DftT3
 
 from pycompute.cuda import cuda_program as cuda_cp
 
@@ -62,3 +62,4 @@ print(end - start)
 
 RE = np.linalg.norm(var_f_cu.get() - var_f) / np.linalg.norm(var_f)
 print(RE)
+

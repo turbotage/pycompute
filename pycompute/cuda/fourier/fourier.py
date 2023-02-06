@@ -1,4 +1,5 @@
 
+from typing import Callable, Tuple
 import cupy as cp
 from jinja2 import Template
 
@@ -17,6 +18,7 @@ def dft_t3_code(dtype: cp.dtype, sign_positive: bool):
 	temp = Template(
 """
 #include <cupy/complex.cuh>
+
 __device__
 void {{funcid}}(const {{fp_type}}* parr, const {{fp_type}}* warr, const complex<{{fp_type}}>* varr, 
 	complex<{{fp_type}}>* oarr, int tid, int nx, int nf) 
@@ -135,48 +137,57 @@ class DftAdjT3(DftT3):
 		super().__init__(dtype, sign_positive=sign_positive, write_to_file=write_to_file)
 
 
-def dft_adj_dft_t3_funcid(dtype: cp.dtype):
+def sinc_dft_adj_dft_t3_funcid(dtype: cp.dtype):
 	return 'dft_adj_dft_t3' + ctc.type_funcid(dtype, 'dft_adj_dft_t3')
 
-def dft_adj_dft_t3_code(dtype: cp.dtype):
+def sinc_dft_adj_dft_t3_code(dtype: cp.dtype):
 	temp = Template(
 """
 #include <cupy/complex.cuh>
+
+__device__
+void {{funcid_frames}}(const {{fp_type}}* parr, const {{fp_type}}* sparr, const {{fp_type}}* cparr, 
+	const complex<{{fp_type}}>* val_arr, const {{fp_type}}* coil_arr, complex<{{fp_type}}>* out_arr,
+	float pxj, float pyj, float pzj, float sxj, float syj, float szj, float cxj, float cyj, float czj,
+	int Nframes, int NF, int NX, int tidx)
+{
+	int idx = tidx; 	// idx = i;
+
+
+	float pxi = parr[idx];
+	float sxi = sparr[idx];
+	float cxi = cparr[idx];
+	idx += NX; 		// idx = NX + i;
+	float pyi = parr[idx];
+	float syi = sparr[idx];
+	float cyi = cparr[idx];
+	idx += NX; 		// idx = 2*NX + i;
+	float pzi = parr[idx];
+	float szi = sparr[idx];
+	float czi = cparr[idx];
+
+	// sinc(xi-xj) = sin(xi-xj)/(xi-xj) = (sxi*cxj - sxj*cxi)/(xi-xj)
+	float sincx = (sxi*cxj - sxj*cxi)/(pxi-pxj);
+	float sincy = (syi*cyj - syj*cyi)/(pyi-pyj);
+	float sincz = (szi*czj - szj*czi)/(pzi-pzj);
+	float sinc = sincx*sincy*sincz;
+
+	float val = val_arr[tidx];
+
+	// Loop over frames
+	for (int k = 0; k < Nframes; ++k) {
+		out_arr[k*NX+tidx] += coil_arr[k*NX+tidx] * val * sinc;
+	}
+
+}
+
 __device__
 void {{funcid}}(const {{fp_type}}* parr, const complex<{{fp_type}}>* varr, 
 	complex<{{fp_type}}>* oarr, int tid, int nx) 
 {
 	float px, py, pz;
-	float pxt, pyt, pzt;
-	pxt = parr[tid];
-	pyt = parr[nx + tid];
-	pzt = parr[2*nx + tid];
 
-	float xdiff, ydiff, zdiff;
-	float sinc;
-
-	complex<{{fp_type}}> sum;
-
-	for (int i = 0; i < nx; ++i) {
-		if (i != tid) {
-			px = parr[i];
-			py = parr[nx + i];
-			pz = parr[2*nx + i];
-
-			xdiff = px - pxt;
-			ydiff = py - pyt;
-			zdiff = pz - pzt;
-
-			sinc = (sin(xdiff) * sin(ydiff) * sin(zdiff)) / (xdiff * ydiff * zdiff);
-
-			sum += varr[i] * sinc;
-		} else {
-			sum += varr[i];
-		}
-	}
-
-	oarr[tid] = sum;
-
+	// TODO: This should loop over px
 }
 """)
 
@@ -256,7 +267,4 @@ void {{funcid}}(const {{fp_type}}* parr, const complex<{{fp_type}}>* varr,
 
 	def get_deps(self):
 		return list()
-
-
-
 
