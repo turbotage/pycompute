@@ -117,3 +117,25 @@ def _expand_shapes(*shapes):
                   for shape in shapes]
 
     return tuple(shapes_exp)
+
+def _check_shape_positive(shape):
+
+    if not all(s > 0 for s in shape):
+        raise ValueError(
+            'Shapes must be positive, got {shape}'.format(shape=shape))
+
+def _check_linops_same_ishape(linops):
+    for linop in linops:
+        if (linop.ishape != linops[0].ishape):
+            raise ValueError(
+                'Linops must have the same ishape, got {linops}.'.format(
+                    linops=linops))
+
+
+def _check_linops_same_oshape(linops):
+    for linop in linops:
+        if (linop.oshape != linops[0].oshape):
+            raise ValueError(
+                'Linops must have the same oshape, got {linops}.'.format(
+                    linops=linops))
+

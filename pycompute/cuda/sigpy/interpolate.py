@@ -3,7 +3,7 @@ import cupy as cp
 import numpy as np
 import math
 
-import pycompute.cuda.fourier.sigpy.util as su
+import pycompute.cuda.sigpy.util as su
 
 
 _interpolate1_cuda = cp.ElementwiseKernel(

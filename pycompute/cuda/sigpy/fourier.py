@@ -3,9 +3,9 @@ import cupy as cp
 import numpy as np
 import math
 
-import pycompute.cuda.fourier.sigpy.util as su
-import pycompute.cuda.fourier.sigpy.gridding as sg
-import pycompute.cuda.fourier.sigpy.interpolate as si
+import pycompute.cuda.sigpy.util as su
+import pycompute.cuda.sigpy.gridding as sg
+import pycompute.cuda.sigpy.interpolate as si
 
 def _fftc(input, oshape=None, axes=None, norm='ortho'):
 
@@ -116,5 +116,26 @@ def nufft_adjoint(input, coord, oshape, oversamp=1.25, width=4):
 	su._apodize(output, ndim, oversamp, width, beta)
 
 	return output
+
+
+def toeplitz_psf(coord, shape, oversamp=1.25, width=4):
+	ndim = coord.shape[-1]
+
+	new_shape = su._get_oversamp_shape(shape, ndim, 2)
+	new_coord = su._scale_coord(coord, new_shape, 2)
+
+	idx = [slice(None)]*len(new_shape)
+	for k in range(-1, -(ndim + 1), -1):
+		idx[k] = new_shape[k]//2
+
+	d = cp.zeros(new_shape, dtype=cp.complex64)
+	d[tuple(idx)] = 1
+
+	psf = nufft(d, new_coord, oversamp, width)
+	psf = nufft_adjoint(psf, new_coord, d.shape, oversamp, width)
+	fft_axes = tuple(range(-1, -(ndim + 1), -1))
+	psf = fft(psf, axes=fft_axes, norm=None) * (2**ndim)
+
+	return psf
 
 
