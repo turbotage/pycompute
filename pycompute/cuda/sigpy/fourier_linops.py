@@ -108,3 +108,25 @@ class NUFFTAdjoint(Linop):
 
 
 
+class NormalNUFFT(Linop):
+
+	def __init__(self, ishape, coord, oversamp=1.25, width=4):
+
+		super().__init__(ishape, ishape)
+
+		ndim = coord.shape[-1]
+		psf = sf.toeplitz_psf(coord, ishape, oversamp, width)
+
+		fft_axes = tuple(range(-1, -(ndim + 1), -1))
+
+		R = Resize(psf.shape, self.ishape)
+		F = FFT(psf.shape, axes=fft_axes)
+		P = Multiply(psf.shape, psf)
+		
+		self.normal_operator = R.H * F.H * P * F * R
+
+	def _apply(self, input):
+		return self.normal_operator.apply(input)
+
+	def _adjoint_linop(self):
+		return self

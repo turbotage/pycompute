@@ -129,13 +129,13 @@ def _interpolate(input, coord, width=2, param=1):
 	ndim = coord.shape[-1]
 
 	batch_shape = input.shape[:-ndim]
-	batch_size = np.prod(batch_shape, np.int64)
+	batch_size = np.prod(batch_shape, dtype=np.int64)
 
 	pts_shape = coord.shape[:-1]
-	npts = np.prod(pts_shape, np.int64)
+	npts = np.prod(pts_shape, dtype=np.int64)
 
 	input = input.reshape([batch_size] + list(input.shape[-ndim:]))
-	coord = coord.reshape([batch_size, npts])
+	coord = coord.reshape([npts, ndim])
 
 	output = cp.zeros([batch_size, npts], dtype=input.dtype)
 

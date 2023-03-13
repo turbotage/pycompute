@@ -79,7 +79,7 @@ def nufft(input, coord, oversamp=1.25, width=4):
 	su._apodize(output, ndim, oversamp, width, beta)
 
 	# Zero-pad
-	output /= np.prod(input.shape[-ndim:], np.int64)**0.5
+	output /= np.prod(input.shape[-ndim:], dtype=np.int64)**0.5
 	output = su._resize(output, os_shape)
 
 	# FFT
@@ -110,7 +110,7 @@ def nufft_adjoint(input, coord, oshape, oversamp=1.25, width=4):
 
 	# Crop
 	output = su._resize(output, oshape)
-	output *= np.prod(os_shape[-ndim:], np.int64) / np.prod(oshape[-ndim:], np.int64)**0.5
+	output *= np.prod(os_shape[-ndim:], dtype=np.int64) / np.prod(oshape[-ndim:], dtype=np.int64)**0.5
 
 	# Apodize
 	su._apodize(output, ndim, oversamp, width, beta)

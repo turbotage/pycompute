@@ -79,7 +79,7 @@ class Linop():
 		elif np.isscalar(input):
 			M = Multiply(self.ishape, input)
 			return Compose([self, M])
-		elif isinstance(input, backend.get_array_module(input).ndarray):
+		elif isinstance(input, cp.get_array_module(input).ndarray):
 			return self.apply(input)
 
 		return NotImplemented
@@ -218,19 +218,18 @@ class Multiply(Linop):
 
 
 	def _apply(self, input):
-		if np.isscalar(self.mult):
-			if self.mult == 1:
+		mult = self.mult
+		if np.isscalar(mult):
+			if mult == 1:
 				return input
 
-			mult = self.mult
 			if self.conj:
 				mult = mult.conjugate()
-
 		else:
 			if self.conj:
 				mult = cp.conj(mult)
 
-			return input * mult
+		return input * mult
 
 	def _adjoint_linop(self):
 		sum_axes = _get_multiply_adjoint_sum_axes(

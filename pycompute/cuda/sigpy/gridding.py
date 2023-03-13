@@ -261,10 +261,10 @@ def _gridding(input, coord, shape, width=2, param=1):
 	ndim = coord.shape[-1]
 
 	batch_shape = shape[:-ndim]
-	batch_size = np.prod(batch_shape, np.int64)
+	batch_size = np.prod(batch_shape, dtype=np.int64)
 
 	pts_shape = coord.shape[:-1]
-	npts = np.prod(pts_shape, np.int64)
+	npts = np.prod(pts_shape, dtype=np.int64)
 
 	isreal = np.issubdtype(input.dtype, np.floating)
 
