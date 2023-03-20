@@ -22,7 +22,6 @@ NX = N1*N2*N3
 NF = 80000
 
 
-
 coord = cp.empty((3,NF), dtype=cp.float32)
 coord[0,:] = cp.random.uniform(-cp.pi, cp.pi, NF).astype(cp.float32)
 coord[1,:] = cp.random.uniform(-cp.pi, cp.pi, NF).astype(cp.float32)
