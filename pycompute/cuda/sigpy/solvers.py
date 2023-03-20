@@ -66,11 +66,9 @@ class ConjugateGradient(Alg):
 			return
 
 		self.alpha = self.rzold / pAp
-		self.x *= self.alpha
-		self.x += self.p
+		self.x += self.alpha * self.p
 		if self.iter < self.max_iter - 1:
-			self.r *=  -self.alpha, 
-			self.r += Ap
+			self.r -= self.alpha * Ap
 			if self.P is not None:
 				z = self.P(self.r)
 			else:

@@ -12,22 +12,29 @@ import pycompute.cuda.sigpy.fourier as fourier
 import pycompute.cuda.sigpy.linop as linop
 
 
-class Fourier_WReSL0(Alg):
-	def __init__(self, y, mps, coord):
+class Fourier_WReSL0():
+	def __init__(self, y, x0, mps, coord, batch_size):
 
 		# Sense operator
 
 		self.ishape = mps.shape[1:]
 
+		self.x = x0
 		
-		S = linop.Multiply(self.ishape, mps)
+		self.sense_op = linop.Multiply(self.ishape, mps)
+		self.sense_op = fulinops.NUFFT(self.sense_op.oshape, coord) * self.sense_op
 
-		S = fulinops.NUFFT(S.oshape, coord)
+		self.sigma_max = 1
+		self.sigma_min = 1e-3
 
-		self.sense_op = S
+		self.sigma_k = self.sigma_max
 
-	def full_gradient():
-		pass
+		self.batch_size = batch_size
+
+
+	def sparsity_gradient(self):
+
+
 
 	def update():
 		pass
