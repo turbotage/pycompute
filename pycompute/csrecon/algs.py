@@ -33,7 +33,6 @@ class SL0_WFE():
 		self.nufft_ops = [NUFFT(self.mul_mps[0].oshape, coords[i], oversamp=2.0) for i in range(len(coords))]
 		self.normal_nufft_ops = [NormalNUFFT(self.mul_mps[0].oshape, coords[i], oversamp=2.0) for i in range(len(coords))]
 
-
 		self.sigma_max = 1
 		self.sigma_min = 1e-3
 

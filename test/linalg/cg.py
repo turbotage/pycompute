@@ -20,7 +20,7 @@ import cupyx.scipy.sparse.linalg as sparse_linalg
 
 N1 = 256
 N2 = 256
-N3 = 160
+N3 = 4
 NX = N1*N2*N3
 NF = 80000
 
