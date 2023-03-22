@@ -16,12 +16,29 @@ from pycompute.cuda.cuda_program import CudaFunction, CudaTensor
 from pycompute.cuda.cuda_program import CudaTensorChecking as ctc
 
 import time
+import copy
 
-def f_funcid(expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
-	return 'f' + ctc.dim_dim_dim_type_funcid(len(pars_str), len(consts_str), ndata,
-		dtype, 'f') + '_' + util.expr_hash(expr, 12)
+class Expr():
+	def __init__(self, expr: str, pars_str: list[str], consts_str: list[str]):
+		self.expr = expr
+		self.pars_str = pars_str
+		self.consts_str = consts_str
 
-def f_code(expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
+class F_GradF():
+	def __init__(self, f: CudaFunction, gradf: CudaFunction, nparam: int, nconst: int, name: str):
+		self.f = f
+		self.gradf = gradf
+		self.nparam = nparam
+		self.nconst = nconst
+		self.name = name
+
+
+
+def f_funcid(model_expr: Expr, ndata: int, dtype: cp.dtype):
+	return 'f' + ctc.dim_dim_dim_type_funcid(len(model_expr.pars_str), len(model_expr.consts_str), ndata,
+		dtype, 'f') + '_' + util.expr_hash(copy.deepcopy(model_expr.expr), 12)
+
+def f_code(model_expr: Expr, ndata: int, dtype: cp.dtype):
 	rjh_temp = Template(
 """
 __device__
@@ -45,26 +62,28 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp
 }
 """)
 
+	exprobj = copy.deepcopy(model_expr)
+
 	type = ctc.check_fp32_or_fp64(CudaTensor(None, dtype), 'res')
 
-	nparam = len(pars_str)
-	nconst = len(consts_str)
+	nparam = len(exprobj.pars_str)
+	nconst = len(exprobj.consts_str)
 
-	funcid = f_funcid(expr, pars_str, consts_str, ndata, dtype)
+	funcid = f_funcid(exprobj, ndata, dtype)
 
-	sym_expr = sympify(expr)
+	sym_expr = sympify(exprobj.expr)
 	# convert parameter names to ease kernel generation
 	for k in range(nparam):
-		temp = pars_str[k]
-		pars_str[k] = 'parvar_' + temp
-		sym_expr = sym_expr.subs(temp, pars_str[k])
+		temp = exprobj.pars_str[k]
+		exprobj.pars_str[k] = 'parvar_' + temp
+		sym_expr = sym_expr.subs(temp, exprobj.pars_str[k])
 
 	for k in range(nconst):
-		temp = consts_str[k]
-		consts_str[k] = 'convar_' + temp
-		sym_expr = sym_expr.subs(temp, consts_str[k])
+		temp = exprobj.consts_str[k]
+		exprobj.consts_str[k] = 'convar_' + temp
+		sym_expr = sym_expr.subs(temp, exprobj.consts_str[k])
 
-	substs, reduced = util.res(str(sym_expr), pars_str, consts_str)
+	substs, reduced = util.res(str(sym_expr), exprobj.pars_str, exprobj.consts_str)
 	cuprint = util.CUDAPrinter()
 
 	sub_str = ""
@@ -74,13 +93,13 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp
 	res_str = '\t\tres = '+cuprint.tcs_f(reduced[0])+'-data[i*Nprobs+tid];'
 
 	for k in range(nparam):
-		p = pars_str[k]
+		p = exprobj.pars_str[k]
 		repl = 'pars['+str(k)+']'
 		sub_str = sub_str.replace(p, repl)
 		res_str = res_str.replace(p, repl)
 
 	for k in range(nconst):
-		c = consts_str[k]
+		c = exprobj.consts_str[k]
 		repl = 'consts['+str(k)+'*'+str(nconst)+'*Nprobs+i*Nprobs+tid]'
 		sub_str = sub_str.replace(c, repl)
 		res_str = res_str.replace(c, repl)
@@ -93,17 +112,19 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp
 	return rjh_kernel
 
 class F(CudaFunction):
-	def __init__(self, expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype, write_to_file: bool = False):
+	def __init__(self, model_expr: Expr, ndata: int, dtype: cp.dtype, write_to_file: bool = False):
+
+		exprobj = copy.deepcopy(model_expr)
 
 		self.type_str = ctc.type_to_typestr(dtype)
-		self.pars_str = pars_str.copy()
-		self.consts_str = consts_str.copy()
+		self.pars_str = exprobj.pars_str.copy()
+		self.consts_str = exprobj.consts_str.copy()
 		self.ndata = ndata
 
 		self.write_to_file = write_to_file
 
-		self.funcid = f_funcid(expr, self.pars_str, self.consts_str, ndata, dtype)
-		self.code = f_code(expr, self.pars_str, self.consts_str, ndata, dtype)
+		self.funcid = f_funcid(exprobj.expr, self.pars_str, self.consts_str, ndata, dtype)
+		self.code = f_code(exprobj.expr, self.pars_str, self.consts_str, ndata, dtype)
 
 		self.mod = None
 		self.run_func = None
@@ -173,11 +194,11 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp
 		return list()
 
 
-def fghhl_funcid(expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
-	return 'fghhl' + ctc.dim_dim_dim_type_funcid(len(pars_str), len(consts_str), ndata,
-		dtype, 'fghhl') + '_' + util.expr_hash(expr, 12)
+def fghhl_funcid(model_expr: Expr, ndata: int, dtype: cp.dtype):
+	return 'fghhl' + ctc.dim_dim_dim_type_funcid(len(model_expr.pars_str), len(model_expr.consts_str), ndata,
+		dtype, 'fghhl') + '_' + util.expr_hash(model_expr.expr, 12)
 
-def fghhl_code(expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
+def fghhl_code(model_expr: Expr, ndata: int, dtype: cp.dtype):
 	
 	rjh_temp = Template(
 """
@@ -232,13 +253,15 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp
 }
 """)
 
+	exprobj = copy.deepcopy(model_expr)
+
 	type = ctc.check_fp32_or_fp64(CudaTensor(None, dtype), 'fghhl')
 
-	nparam = len(pars_str)
-	nconst = len(consts_str)
+	nparam = len(exprobj.pars_str)
+	nconst = len(exprobj.consts_str)
 	nhes = round(nparam*(nparam+1)/2)
 
-	funcid = fghhl_funcid(expr, pars_str, consts_str, ndata, dtype)
+	funcid = fghhl_funcid(exprobj, ndata, dtype)
 
 	min_scaling = ''
 	max_func = ''
@@ -249,19 +272,19 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp
 		max_func = 'fmax'
 		min_scaling = '1e-4'
 
-	sym_expr = sympify(expr)
+	sym_expr = sympify(exprobj.expr)
 	# convert parameter names to ease kernel generation
 	for k in range(nparam):
-		temp = pars_str[k]
-		pars_str[k] = 'parvar_' + temp
-		sym_expr = sym_expr.subs(temp, pars_str[k])
+		temp = exprobj.pars_str[k]
+		exprobj.pars_str[k] = 'parvar_' + temp
+		sym_expr = sym_expr.subs(temp, exprobj.pars_str[k])
 
 	for k in range(nconst):
-		temp = consts_str[k]
-		consts_str[k] = 'convar_' + temp
-		sym_expr = sym_expr.subs(temp, consts_str[k])
+		temp = exprobj.consts_str[k]
+		exprobj.consts_str[k] = 'convar_' + temp
+		sym_expr = sym_expr.subs(temp, exprobj.consts_str[k])
 
-	substs, reduced = util.res_jac_hes(str(sym_expr), pars_str, consts_str)
+	substs, reduced = util.res_jac_hes(str(sym_expr), exprobj.pars_str, exprobj.consts_str)
 	cuprint = util.CUDAPrinter()
 
 	sub_str = ""
@@ -295,7 +318,7 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp
 		hes_str += '\t\thes['+str(k)+'] = '+ctstr+'*res;\n'
 
 	for k in range(nparam):
-		p = pars_str[k]
+		p = exprobj.pars_str[k]
 		repl = 'pars['+str(k)+']'
 		sub_str = sub_str.replace(p, repl)
 		eval_str = eval_str.replace(p, repl)
@@ -303,7 +326,7 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp
 		hes_str = hes_str.replace(p, repl)
 
 	for k in range(nconst):
-		c = consts_str[k]
+		c = exprobj.consts_str[k]
 		repl = 'consts['+str(k)+'*'+str(nconst)+'*Nprobs+i*Nprobs+tid]'
 		sub_str = sub_str.replace(c, repl)
 		eval_str = eval_str.replace(c, repl)
@@ -318,16 +341,16 @@ void {{funcid}}(const {{fp_type}}* params, const {{fp_type}}* consts, const {{fp
 	return rjh_kernel
 
 class FGHHL(CudaFunction):
-	def __init__(self, expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype, write_to_file: bool = False):
+	def __init__(self, model_expr: Expr, ndata: int, dtype: cp.dtype, write_to_file: bool = False):
 		self.type_str = ctc.type_to_typestr(dtype)
-		self.pars_str = pars_str.copy()
-		self.consts_str = consts_str.copy()
+		self.pars_str = model_expr.pars_str.copy()
+		self.consts_str = model_expr.consts_str.copy()
 		self.ndata = ndata
 
 		self.write_to_file = write_to_file
 
-		self.funcid = fghhl_funcid(expr, self.pars_str, self.consts_str, ndata, dtype)
-		self.code = fghhl_code(expr, self.pars_str, self.consts_str, ndata, dtype)
+		self.funcid = fghhl_funcid(model_expr, self.pars_str, self.consts_str, ndata, dtype)
+		self.code = fghhl_code(model_expr, self.pars_str, self.consts_str, ndata, dtype)
 
 		self.mod = None
 		self.run_func = None
@@ -779,11 +802,17 @@ void {{funcid}}(const float* pars, const float* g, const {{fp_type}}* f, const {
 		return list()
 
 
-def second_order_levenberg_marquardt_funcid(expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
-	return 'second_order_levenberg_marquardt' + ctc.dim_dim_dim_type_funcid(len(pars_str), len(consts_str), ndata,
-		dtype, 'second_order_levenberg_marquardt') + '_' + util.expr_hash(expr, 12)
+def second_order_levenberg_marquardt_funcid(model_expr: Expr | None, f_gradf: F_GradF, ndata: int, dtype: cp.dtype):
+	if model_expr is not None and f_gradf is None:
+		return 'second_order_levenberg_marquardt' + ctc.dim_dim_dim_type_funcid(len(model_expr.pars_str), len(model_expr.consts_str), ndata,
+			dtype, 'second_order_levenberg_marquardt') + '_' + util.expr_hash(model_expr.expr, 12)
+	elif f_gradf is not None and model_expr is None:
+		return 'second_order_levenberg_marquardt' + ctc.dim_dim_dim_type_funcid(f_gradf.nparam, f_gradf.nconst, ndata,
+			dtype, 'second_order_levenberg_marquardt') + '_' + f_gradf.name
+	else:
+		raise RuntimeError('One and only one of model_expr or f_gradf must be non None')
 
-def second_order_levenberg_marquardt_code(expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype):
+def second_order_levenberg_marquardt_code(model_expr: Expr | None, f_gradf: F_GradF | None, ndata: int, dtype: cp.dtype):
 	codestr = Template(
 """
 __device__
@@ -890,17 +919,21 @@ void {{funcid}}(const {{fp_type}}* consts, const {{fp_type}}* data, const {{fp_t
 }
 """)
 
-	nparam = len(pars_str)
-	nconst = len(consts_str)
+
+	from_expr = model_expr is not None
+
+	nparam = len(model_expr.pars_str) if from_expr else f_gradf.nparam
+	nconst = len(model_expr.consts_str) if from_expr else f_gradf.nconst
+
 	nhes = round(nparam*(nparam+1)/2)
 
-	funcid = second_order_levenberg_marquardt_funcid(expr, pars_str, consts_str, ndata, dtype)
+	funcid = second_order_levenberg_marquardt_funcid(model_expr, f_gradf, ndata, dtype)
 
 	type = ctc.check_fp32_or_fp64(CudaTensor(None, dtype), 'second_order_levenberg_marquardt')
 
-	grad_funcid = fghhl_funcid(expr, pars_str, consts_str, ndata, dtype)
+	grad_funcid = fghhl_funcid(model_expr, ndata, dtype) if from_expr else f_gradf.gradf.get_device_funcid()
 	gmw81_funcid = solver.gmw81_solver_funcid(nparam, dtype)
-	fobj_funcid = f_funcid(expr, pars_str, consts_str, ndata, dtype)
+	fobj_funcid = f_funcid(model_expr, ndata, dtype) if from_expr else f_gradf.f.get_device_funcid()
 	gain_funcid = gain_ratio_step_funcid(nparam, dtype)
 	clamp_funcid = clamp_pars_funcid(nparam, dtype)
 	converg_funcid = gradient_convergence_funcid(nparam, dtype)
@@ -909,22 +942,28 @@ void {{funcid}}(const {{fp_type}}* consts, const {{fp_type}}* data, const {{fp_t
 		gmw81_funcid=gmw81_funcid, fobj_funcid=fobj_funcid, gain_funcid=gain_funcid, clamp_funcid=clamp_funcid, converg_funcid=converg_funcid)
 
 class SecondOrderLevenbergMarquardt(CudaFunction):
-	def __init__(self, expr: str, pars_str: list[str], consts_str: list[str], ndata: int, dtype: cp.dtype, write_to_file: bool = False):
-		self.nparam = len(pars_str)
+	def __init__(self, model_expr: Expr | None, f_gradf: F_GradF | None, ndata: int, dtype: cp.dtype, write_to_file: bool = False):
+		expr_true = model_expr is not None
+		self.expr_true = expr_true
+
+		self.nparam = len(model_expr.pars_str) if expr_true else f_gradf.nparam
 		self.nhes = round(self.nparam * (self.nparam + 1) / 2)
-		self.nconst = len(consts_str)
+		self.nconst = len(model_expr.consts_str) if expr_true else f_gradf.nconst
 		self.ndata = ndata
 		self.dtype = dtype
 		self.type_str = ctc.type_to_typestr(dtype)
 
 		self.write_to_file = write_to_file
 
-		self.expr = expr
-		self.pars_str = pars_str.copy()
-		self.consts_str = consts_str.copy()
+		self.model_expr = model_expr
+		self.f_gradf = f_gradf
 
-		self.funcid = second_order_levenberg_marquardt_funcid(expr, pars_str.copy(), consts_str.copy(), ndata, dtype)
-		self.code = second_order_levenberg_marquardt_code(expr, pars_str.copy(), consts_str.copy(), ndata, dtype)
+		self.expr = model_expr.expr if expr_true else None
+		self.pars_str = model_expr.pars_str.copy() if expr_true else None
+		self.consts_str = model_expr.consts_str.copy() if expr_true else None
+
+		self.funcid = second_order_levenberg_marquardt_funcid(model_expr, f_gradf, ndata, dtype)
+		self.code = second_order_levenberg_marquardt_code(model_expr, f_gradf, ndata, dtype)
 
 		self.build()
 
@@ -982,8 +1021,8 @@ void {{funcid}}(const {{fp_type}}* consts, const {{fp_type}}* data, const {{fp_t
 
 	def get_deps(self):
 		return [
-			FGHHL(self.expr, self.pars_str.copy(), self.consts_str.copy(), self.ndata, self.dtype, self.write_to_file),
-			F(self.expr, self.pars_str.copy(), self.consts_str.copy(), self.ndata, self.dtype, self.write_to_file),
+			FGHHL(self.expr, self.pars_str.copy(), self.consts_str.copy(), self.ndata, self.dtype, self.write_to_file) if self.expr_true else self.f_gradf.gradf,
+			F(self.expr, self.pars_str.copy(), self.consts_str.copy(), self.ndata, self.dtype, self.write_to_file) if self.expr_true else self.f_gradf.f,
 			solver.GMW81Solver(self.nparam, self.dtype, self.write_to_file),
 			GainRatioStep(self.nparam, self.dtype, self.write_to_file),
 			ClampPars(self.nparam, self.dtype, self.write_to_file),
