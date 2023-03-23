@@ -15,9 +15,9 @@ import pycompute.cuda.sigpy.fourier as fourier
 import pycompute.cuda.sigpy.linop as linop
 
 
-N1 = 140
-N2 = 140
-N3 = 140
+N1 = 128
+N2 = 128
+N3 = 128
 NX = N1*N2*N3
 NF = 80000
 
