@@ -19,10 +19,15 @@ import time
 import copy
 
 class Expr():
-	def __init__(self, expr: str, pars_str: list[str], consts_str: list[str]):
+	def __init__(self, expr: str, pars_str: list[str], consts_str: list[str], 
+				nonlin_terms: list[str] | None, nonlin_pars: list[int] | None):
 		self.expr = expr
 		self.pars_str = pars_str
 		self.consts_str = consts_str
+		self.nonlin_terms = nonlin_terms
+		self.nonlin_pars = nonlin_pars
+
+
 
 class F_GradF():
 	def __init__(self, f: CudaFunction, gradf: CudaFunction, nparam: int, nconst: int, name: str):

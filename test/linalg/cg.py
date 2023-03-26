@@ -69,7 +69,7 @@ print(relerr.get())
 cp.cuda.get_current_stream().synchronize()
 start = time.time()
 
-tupx = sparse_linalg.cg(CP_LHL, b.flatten())
+tupx = sparse_linalg.cg(CP_LHL, b.flatten(), maxiter=100)
 
 end = time.time()
 print(end - start)
