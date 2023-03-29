@@ -68,7 +68,7 @@ def ifft(input, oshape=None, axes=None, center=True, norm='ortho'):
 	return output
 
 
-def nufft(input, coord, oversamp=1.25, width=4):
+def nufft(input, coord, oversamp=1.25, width=4, center=True):
 	ndim = coord.shape[-1]
 	beta = np.pi * (((width / oversamp) * (oversamp - 0.5))**2 - 0.8)**0.5
 	os_shape = su._get_oversamp_shape(input.shape, ndim, oversamp)
@@ -83,7 +83,7 @@ def nufft(input, coord, oversamp=1.25, width=4):
 	output = su._resize(output, os_shape)
 
 	# FFT
-	output = fft(output, axes=range(-ndim, 0), norm=None)
+	output = fft(output, axes=range(-ndim, 0), norm=None, center=center)
 
 	# Interpolate
 	coord = su._scale_coord(coord, input.shape, oversamp)
@@ -93,7 +93,7 @@ def nufft(input, coord, oversamp=1.25, width=4):
 	return output
 
 
-def nufft_adjoint(input, coord, oshape, oversamp=1.25, width=4):
+def nufft_adjoint(input, coord, oshape, oversamp=1.25, width=4, center=True):
 	ndim = coord.shape[-1]
 	beta = np.pi * (((width / oversamp) * (oversamp - 0.5))**2 - 0.8)**0.5
 	oshape = list(oshape)
@@ -106,7 +106,7 @@ def nufft_adjoint(input, coord, oshape, oversamp=1.25, width=4):
 	output /= width**ndim
 
 	# IFFT
-	output = ifft(output, axes=range(-ndim, 0), norm=None)
+	output = ifft(output, axes=range(-ndim, 0), norm=None, center=center)
 
 	# Crop
 	output = su._resize(output, oshape)
