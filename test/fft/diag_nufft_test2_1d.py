@@ -33,9 +33,16 @@ psf = fourier.toeplitz_psf(coord, shape=(NX,), oversamp=4.0, width=16)
 #second_half = cp.sinc(cp.arange(NX).astype(cp.float32) / (2*cp.pi))
 
 temp_coord = coord
-#temp_coord = cp.fft.ifftshift(coord)
+temp_coord = cp.fft.ifftshift(coord)
 
-my_ipsf = cp.empty((2*NX,), dtype=cp.complex64)
+nufft_matrix = cp.empty((NF,NX), dtype=cp.complex64)
+ATA = cp.conjugate(cp.transpose(nufft_matrix, (1,0))) @ nufft_matrix
+
+for i in range(0,NF):
+	for j in range(0,NX):
+		nufft_matrix[i,j] = cp.exp(-2j*cp.pi*coord[i]*j/NX).squeeze()
+
+my_ipsf = cp.zeros((2*NX,), dtype=cp.complex64)
 for i in range(NX):
 	for j in range(NF):
 		my_ipsf[i] += cp.squeeze(cp.exp(-2*cp.pi*1j*temp_coord[j]*i/NX))

@@ -23,9 +23,9 @@ NX = 32
 NF = 32
 
 coord = cp.empty((1,NF), dtype=cp.float32)
-coord[0,:] = cp.random.uniform(-cp.pi, cp.pi, NF).astype(cp.float32)
-#for i in range(NF):
-#	coord[0,i] = i - NX // 2 #2*cp.pi*i/NF
+#coord[0,:] = cp.random.uniform(-cp.pi, cp.pi, NF).astype(cp.float32)
+for i in range(NF):
+	coord[0,i] = i - NX // 2 #2*cp.pi*i/NF
 #print(coord)
 
 #print('coord')
@@ -103,11 +103,6 @@ pmynufft = nufft_matrix @ pmynufft
 
 #plt.show()
 
-
-
-
-
-
 ATA = cp.conjugate(cp.transpose(nufft_matrix, (1,0))) @ nufft_matrix
 psf = fourier.toeplitz_psf(coord, shape=(NX,), oversamp=4.0, width=8)
 
@@ -119,12 +114,20 @@ my_ipsf[0:NX] = ipsf_left
 #my_ipsf[(NX+1):] = ipsf_right
 my_ipsf[(NX+1):] = cp.conjugate(cp.flip(ipsf_left[1:]))
 #my_ipsf[(NX+1):] = ipsf_right
-my_ipsf[NX] = (my_ipsf[NX-1] + my_ipsf[NX+1]) * 0.5 #((my_ipsf[NX-1] + my_ipsf[NX+1]) * 0.5)
+#my_ipsf[NX] = (cp.real(my_ipsf[NX-1] + my_ipsf[NX+1])) * 0.5 + 0.5j * (cp.imag(my_ipsf[NX-1]) + cp.imag(my_ipsf[NX+1]))
+#my_ipsf[NX] = (my_ipsf[NX-1] + my_ipsf[NX+1]) * 0.5
+my_ipsf[NX] = my_ipsf[0] #my_ipsf[NX+1]*0.5 + my_ipsf[NX-1]*0.5
+#my_ipsf[NX] = my_ipsf[0]
 my_ipsf /= NX
+
+#my_ipsf = cp.fft.fftshift(my_ipsf)
 
 #my_ipsf = cp.fft.ifftshift(my_ipsf)
 
-ipsf = cp.fft.ifft(cp.fft.ifftshift(psf))
+ipsf = psf
+ipsf = cp.fft.ifftshift(ipsf)
+ipsf = cp.fft.ifft(ipsf)
+#ipsf = cp.fft.fftshift(ipsf)
 #ipsf = cp.fft.ifft(psf)
 
 plt.figure()
