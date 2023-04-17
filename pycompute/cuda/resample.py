@@ -15,8 +15,31 @@ import pycompute.cuda.sigpy.fourier_linops as fulinops
 import pycompute.cuda.sigpy.fourier as fourier
 import pycompute.cuda.sigpy.linop as linop
 
-def full_resampling(filename_images, filename_coords, coorner, downsize_factor):
-	 
+import h5py
+
+def full_resampling(filename_images, filename_smaps, filename_coords, coorner, downsize_factor):
+	smaps = np.array([0])
+	images = np.array([0])
+	coords = np.array([0])
+ 
+
+	print('Reading images file')
+	with h5py.File(filename_images, 'r') as h5_img:
+		images = h5_img['images'][()]
+
+	with h5py.File(filename_smaps, 'r') as h5_smap:
+		ncoils = len(h5_smap['Maps'])
+		shape = h5_smap['Maps']['SenseMaps_0'][()].shape
+		smaps = np.empty((ncoils, *shape), dtype=cp.complex64)
+
+		for i in range(ncoils):
+			smap = h5_smap['Maps']['SenseMaps_' + str(i)][()]
+			smaps[i,:,:,:] = (smap['real'] + 1j*smap['imag']).astype(np.complex64)
+
+	with h5py.File 
+
+	return (images, smaps, coords)
+
 
 
 
@@ -91,7 +114,7 @@ def sample_kdata(coords, images, smaps, v_enc):
 	images_mag = images[:,0]
 	images_vel = np.expand_dims(np.transpose(images[:,1:], axes=(2,3,4,0,1)), axis=-1)
 
-	A = (1/v_enc) * np.array(
+	A = (1.0/v_enc) * np.array(
 		[
 		[ 0,  0,  0],
 		[-1, -1, -1],
