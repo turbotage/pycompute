@@ -4,7 +4,8 @@ import scipy.fftpack as spfft
 
 import matplotlib.pyplot as plt
 
-N1 = 64
+N1 = 8
+
 shape = (N1,)
 shape_2n = tuple([2*x for x in shape])
 
@@ -18,6 +19,7 @@ dct2 = np.fft.fft(dct2, 2*N1)
 dct2 = dct2[:shape[0]]
 dct2 *= 2*np.exp(-1j*np.pi*np.arange(N1) / (2*N1))
 dct2 = np.real(dct2)
+
 
 
 
