@@ -23,9 +23,9 @@ NX = 32
 NF = 32
 
 coord = cp.empty((1,NF), dtype=cp.float32)
-#coord[0,:] = cp.random.uniform(-cp.pi, cp.pi, NF).astype(cp.float32)
-for i in range(NF):
-	coord[0,i] = i - NX // 2 #2*cp.pi*i/NF
+coord[0,:] = cp.random.uniform(-cp.pi, cp.pi, NF).astype(cp.float32)
+#for i in range(NF):
+#	coord[0,i] = i - NX // 2 #2*cp.pi*i/NF
 #print(coord)
 
 #print('coord')
@@ -46,62 +46,10 @@ for i in range(0,NF):
 #p = cp.empty((NX,), dtype=cp.complex64)
 p = cp.arange(NX).astype(cp.complex64)
 p = cp.ones((NX,)) + 0.4*cp.exp(p * (cp.pi*2/NF)) + 0.3*cp.exp(p * (cp.pi*4/NF))
-##print('p: ', p.get())
-#plt.plot(p.get())
-
-#p[0] = 0.5 + 1j
-#p[1] = 0 #0.7 - 0.7j
-#p[2] = 0 #0.3 + 0.3j
-#p[3] = 0 #0.2 - 0.1j
-
 pexpand = cp.zeros((2*NX,), dtype=cp.complex64)
 pexpand[0:NX] = p
 
-pnufft = p
-#pnufft = cp.fft.ifftshift(pnufft)
-pnufft = cp.sqrt(NX) * fourier.nufft(pnufft, coord, oversamp=4.0, width=8, center=True)
 
-#print('interp_nufft: ', cp.real(pnufft).get())
-
-shift_vector = cp.ones((NX,), dtype=cp.complex64)
-shift_vector *= cp.exp(-1j*cp.pi/(NX)) ** cp.arange(NX) # cp.exp(-1j*cp.pi / (NX - 1)) * cp.arange(NX)
-#print(shift_vector)
-
-pmynufft = p
-#pmynufft = p * shift_vector
-#pmynufft = cp.fft.fftshift(pmynufft)
-pmynufft = cp.fft.ifftshift(pmynufft)
-pmynufft = nufft_matrix @ pmynufft
-#pmynufft = cp.fft.ifftshift(pmynufft)
-#pmynufft = cp.fft.fftshift(pmynufft)
-#pmynufft = p * shift_vector
-
-#ratio = pmynufft / pnufft
-#print(ratio.get())
-
-# plt.figure()
-# plt.plot(cp.real(pmynufft).get())
-# plt.plot(cp.real(pnufft).get())
-# plt.legend(['my_nufft', 'nufft'])
-# plt.show()
-
-# plt.figure()
-# plt.plot(cp.imag(pmynufft).get())
-# plt.plot(cp.imag(pnufft).get())
-# plt.legend(['my_nufft', 'nufft'])
-# plt.show()
-
-# plt.figure()
-# plt.plot(cp.abs(pmynufft).get())
-# plt.plot(cp.abs(pnufft).get())
-# plt.legend(['my_nufft', 'nufft'])
-# plt.show()
-
-
-#print('matrix_nufft: ', cp.real(pmynufft).get())
-
-
-#plt.show()
 
 ATA = cp.conjugate(cp.transpose(nufft_matrix, (1,0))) @ nufft_matrix
 psf = fourier.toeplitz_psf(coord, shape=(NX,), oversamp=4.0, width=8)
@@ -151,4 +99,7 @@ plt.plot(cp.abs(my_ipsf).get())
 plt.legend(['ipsf', 'my_ipsf'])
 plt.show()
 
-print('Hello')
+
+
+
+

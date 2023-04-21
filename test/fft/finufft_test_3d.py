@@ -17,9 +17,9 @@ import matplotlib.pyplot as plt
 
 import finufft
 
-N1 = 3
-N2 = 5
-N3 = 4
+N1 = 2
+N2 = 2
+N3 = 2
 NX = N1*N2*N3
 NF = NX
 
@@ -47,3 +47,10 @@ print('real: ')
 print(np.real(nuftt2_out))
 print('imag: ')
 print(np.imag(nuftt2_out))
+
+nufft1_out = finufft.nufft3d1(coord[0,:], coord[1,:], coord[2,:], nuftt2_out, (N1,N2,N3))
+
+print('real: ')
+print(np.real(nufft1_out).flatten())
+print('imag: ')
+print(np.imag(nufft1_out).flatten())

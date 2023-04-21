@@ -17,9 +17,9 @@ import matplotlib.pyplot as plt
 
 import finufft
 
-N1 = 3
-N2 = N1
-N3 = N1
+N1 = 2
+N2 = 2
+N3 = 2
 NX = N1*N2*N3
 NF = NX
 
@@ -27,7 +27,7 @@ coord = np.empty((3,NF), dtype=np.float32)
 l = 0
 for x in range(N1):
 	for y in range(N2):
-		for z in range(N2):
+		for z in range(N3):
 			kx = -np.pi + x * 2 * np.pi / N1
 			ky = -np.pi + y * 2 * np.pi / N2
 			kz = -np.pi + z * 2 * np.pi / N3
@@ -60,12 +60,15 @@ psf1 = fourier.toeplitz_psf(sp_coords, (1,N1,N2,N3), oversamp=2.0, width=8).get(
 unity_vector = np.zeros((2*N1,2*N2,2*N3), dtype=cp.complex64)
 unity_vector[0,0,0] = 1
 
+print(unity_vector)
+
 unity_vector = np.fft.ifftshift(unity_vector)
 nuftt2_out = finufft.nufft3d2(coord[:,0], coord[:,1], coord[:,2], unity_vector) / np.sqrt(NX)
 nufft1_out = finufft.nufft3d1(coord[:,0], coord[:,1], coord[:,2], nuftt2_out, (2*N1,2*N2,2*N3)) / np.sqrt(NX)
-psf2 = np.fft.ifftshift(nufft1_out)
+psf2 = np.fft.fftshift(nufft1_out)
+#psf2 = nufft1_out
 psf2 = np.fft.fftn(psf2)
-psf2 = np.fft.ifftshift(psf2)
+psf2 = np.fft.fftshift(psf2)
 
 psf1 = psf1.flatten()
 psf2 = psf2.flatten()
@@ -85,3 +88,6 @@ plt.figure()
 plt.plot(np.imag(psf1), 'r-')
 plt.plot(np.imag(psf2), 'g-')
 plt.show()
+
+
+

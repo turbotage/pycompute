@@ -115,13 +115,13 @@ class NormalNUFFT(Linop):
 		super().__init__(ishape, ishape)
 
 		ndim = coord.shape[-1]
-		psf = sf.toeplitz_psf(coord, ishape, oversamp, width)
+		self.psf = sf.toeplitz_psf(coord, ishape, oversamp, width)
 
 		fft_axes = tuple(range(-1, -(ndim + 1), -1))
 
-		R = Resize(psf.shape, self.ishape)
-		F = FFT(psf.shape, axes=fft_axes)
-		P = Multiply(psf.shape, psf)
+		R = Resize(self.psf.shape, self.ishape)
+		F = FFT(self.psf.shape, axes=fft_axes)
+		P = Multiply(self.psf.shape, self.psf)
 		
 		self.normal_operator = R.H * F.H * P * F * R
 
@@ -130,3 +130,6 @@ class NormalNUFFT(Linop):
 
 	def _adjoint_linop(self):
 		return self
+
+	def get_psf(self):
+		return self.psf
