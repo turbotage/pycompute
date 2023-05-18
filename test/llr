@@ -1,0 +1,63 @@
+
+import time
+import torch
+
+blocksize = 16
+nframe = 40
+encodes = 5
+nrun = 1
+
+blocks = [[torch.rand(blocksize,blocksize,blocksize, dtype=torch.complex64) for i in range(encodes)] for j in range(nframe)]
+
+looped = torch.empty(encodes * blocksize * blocksize * blocksize, encodes)
+
+stacks = [torch.cat([block.flatten() for block in blocks[j]]) for j in range(nframe)]
+
+stack = torch.stack(stacks, dim=1).to(torch.device('cuda:0'))
+
+stack_norm = torch.linalg.norm(stack)
+
+# Warm up
+U, S, Vh = torch.linalg.svd(stack, full_matrices=False, driver='gesvdj')
+U, S, Vh = torch.linalg.svd(stack, full_matrices=False, driver='gesvda')
+U, S, Vh = torch.linalg.svd(stack, full_matrices=False, driver='gesvd')
+
+
+for i in range(nrun):
+	torch.cuda.synchronize()
+	start = time.time()
+	U, S, Vh = torch.linalg.svd(stack, full_matrices=False, driver='gesvdj')
+	torch.cuda.synchronize()
+	end = time.time()
+	print('Time 1: ', end - start)
+	stacked_out = U @ (S.unsqueeze(1) * Vh)
+	norm_diff = torch.linalg.norm(stacked_out - stack)
+	print('Relative Error 1: ', norm_diff / stack_norm)
+	print('Absolute Error 1: ', norm_diff)
+
+	torch.cuda.synchronize()
+	start = time.time()
+	U, S, Vh = torch.linalg.svd(stack, full_matrices=False, driver='gesvda')
+	torch.cuda.synchronize()
+	end = time.time()
+	print('Time 2: ', end - start)
+	stacked_out = U @ (S.unsqueeze(1) * Vh)
+	norm_diff = torch.linalg.norm(stacked_out - stack)
+	print('Relative Error 2: ', norm_diff / stack_norm)
+	print('Absolute Error 2: ', norm_diff)
+
+	torch.cuda.synchronize()
+	start = time.time()
+	U, S, Vh = torch.linalg.svd(stack, full_matrices=False, driver='gesvd')
+	torch.cuda.synchronize()
+	end = time.time()
+	print('Time 3: ', end - start)
+	stacked_out = U @ (S.unsqueeze(1) * Vh)
+	norm_diff = torch.linalg.norm(stacked_out - stack)
+	print('Relative Error 3: ', norm_diff / stack_norm)
+	print('Absolute Error 3: ', norm_diff)
+
+
+print(stack.shape)
+
+

@@ -70,24 +70,53 @@ psf2 = np.fft.fftshift(nufft1_out)
 psf2 = np.fft.fftn(psf2)
 psf2 = np.fft.fftshift(psf2)
 
-psf1 = psf1.flatten()
-psf2 = psf2.flatten()
+psf1_p = psf1.flatten()
+psf2_p = psf2.flatten()
 
 
 plt.figure()
-plt.plot(np.abs(psf1), 'r-')
-plt.plot(np.abs(psf2), 'g-')
+plt.plot(np.abs(psf1_p), 'r-')
+plt.plot(np.abs(psf2_p), 'g-')
 plt.show()
 
 plt.figure()
-plt.plot(np.real(psf1), 'r-')
-plt.plot(np.real(psf2), 'g-')
+plt.plot(np.real(psf1_p), 'r-')
+plt.plot(np.real(psf2_p), 'g-')
 plt.show()
 
 plt.figure()
-plt.plot(np.imag(psf1), 'r-')
-plt.plot(np.imag(psf2), 'g-')
+plt.plot(np.imag(psf1_p), 'r-')
+plt.plot(np.imag(psf2_p), 'g-')
 plt.show()
 
 
+x = (np.random.rand(N1,N2,N3) + 1j*np.random.rand(N1,N2,N3)).astype(np.complex64)
+
+y1 = finufft.nufft3d2(coord[:,0], coord[:,1], coord[:,2], x) /  np.sqrt(NX)
+y1 = finufft.nufft3d1(coord[:,0], coord[:,1], coord[:,2], y1, (N1,N2,N3)) / np.sqrt(NX)
+
+
+
+psf2 = np.fft.ifftshift(psf2)
+y2 = np.fft.ifftn(psf2 * np.fft.fftn(x, (2*N1,2*N2,2*N3)))
+y2 = y2[:N1,:N2,:N3]
+
+y1_p = y1.flatten()
+y2_p = y2.flatten()
+
+
+plt.figure()
+plt.plot(np.abs(y1_p), 'r-')
+plt.plot(np.abs(y2_p), 'g-')
+plt.show()
+
+plt.figure()
+plt.plot(np.real(y1_p), 'r-')
+plt.plot(np.real(y2_p), 'g-')
+plt.show()
+
+plt.figure()
+plt.plot(np.imag(y1_p), 'r-')
+plt.plot(np.imag(y2_p), 'g-')
+plt.show()
 
